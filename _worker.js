@@ -513,6 +513,37 @@ export default {
       return new Response('Not Found', { status: 404 });
     }
 
+    // 3.5) 出站诊断 (需要 admin 密码)
+    if (segs[0] === 'diag' && url.searchParams.get('key') === cfg.adminPass) {
+      const out = { time: new Date().toISOString(), proxyip: cfg.proxyip || '(empty)', doh: cfg.doh };
+      // a) 直接拨号测试
+      try {
+        const t0 = Date.now();
+        const s = await withTimeout(connect({ hostname: 'example.com', port: 443 }), 8000, 'timeout');
+        s.close();
+        out.direct443 = `OK (${Date.now() - t0}ms)`;
+      } catch (e) { out.direct443 = `FAIL: ${e.message}`; }
+      // b) ProxyIP 解析测试
+      if (cfg.proxyip) {
+        try {
+          const t0 = Date.now();
+          const ips = await resolveProxyIPs(cfg, cfg.proxyip);
+          out.proxyipResolve = `OK (${Date.now() - t0}ms): ${ips.map(x => x.join(':')).join(', ')}`;
+          // c) 逐个拨号测试
+          out.proxyipDial = [];
+          for (const [ph, pp] of ips.slice(0, 4)) {
+            try {
+              const t1 = Date.now();
+              const s = await withTimeout(connect({ hostname: ph, port: pp }), 8000, 'timeout');
+              s.close();
+              out.proxyipDial.push(`${ph}:${pp} OK (${Date.now() - t1}ms)`);
+            } catch (e) { out.proxyipDial.push(`${ph}:${pp} FAIL: ${e.message}`); }
+          }
+        } catch (e) { out.proxyipResolve = `FAIL: ${e.message}`; }
+      }
+      return new Response(JSON.stringify(out, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    }
+
     // 4) 首页伪装
     if (url.pathname === '/' || url.pathname === '') {
       if (cfg.fakeUrl) return Response.redirect(cfg.fakeUrl, 302);
