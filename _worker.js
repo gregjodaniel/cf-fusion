@@ -42,7 +42,7 @@ const REGIONS = [
   { code: 'JP', name: '日本节点', flag: '🇯🇵', match: /日本|东京|大阪|JP|Japan|Tokyo|Osaka|NRT|HND|KIX|FUK|OKA|CTS/i, colos: ['NRT', 'HND', 'KIX', 'FUK', 'OKA', 'CTS'] },
   { code: 'US', name: '美国节点', flag: '🇺🇸', match: /美国|美区|US|USA|United\s*States|America|SJC|LAX|SFO|ORD|IAD|EWR|JFK|SEA|ATL|DFW|DEN|PHX|MIA|BOS/i, colos: ['SJC', 'LAX', 'SFO', 'ORD', 'IAD', 'EWR', 'JFK', 'SEA', 'ATL', 'DFW', 'DEN', 'PHX', 'MIA', 'BOS', 'CLT', 'IAH', 'DTW', 'MSP'] },
   { code: 'SG', name: '新加坡节点', flag: '🇸🇬', match: /新加坡|狮城|SG|Singapore|SIN/i, colos: ['SIN'] },
-  { code: 'TW', name: '台湾节点', flag: '🇨🇳', match: /台湾|台北|TW|Taiwan|Taipei|TPE|KHH/i, colos: ['TPE', 'KHH'] },
+  { code: 'TW', name: '台湾节点', flag: '🇹🇼', match: /台湾|台北|TW|Taiwan|Taipei|TPE|KHH/i, colos: ['TPE', 'KHH'] },
   { code: 'KR', name: '韩国节点', flag: '🇰🇷', match: /韩国|首尔|KR|Korea|Seoul|ICN/i, colos: ['ICN'] },
   { code: 'DE', name: '德国节点', flag: '🇩🇪', match: /德国|DE|Germany|Frankfurt|Berlin|FRA|BER|MUC/i, colos: ['FRA', 'BER', 'MUC', 'DUS'] },
   { code: 'UK', name: '英国节点', flag: '🇬🇧', match: /英国|UK|GB|Britain|London|LHR|MAN/i, colos: ['LHR', 'MAN', 'EDI'] },
@@ -139,10 +139,27 @@ async function probeColo(host) {
     const head = await r.readUntil(te.encode('\r\n\r\n'), 4096, 3000);
     const headStr = td.decode(head);
     let bodyStr = '';
+    const clM = headStr.match(/content-length:\s*(\d+)/i);
+    const contentLen = clM ? parseInt(clM[1], 10) : 0;
     try {
-      const bodyBytes = await r.readExactly(256, 1500);
-      bodyStr = td.decode(bodyBytes);
-    } catch {}
+      if (contentLen > 0 && contentLen <= 4096) {
+        const bodyBytes = await r.readExactly(contentLen, 1500);
+        bodyStr = td.decode(bodyBytes);
+      } else {
+        // 无 Content-Length 或分块时读取可用残余数据
+        const chunks = [r.leftover()];
+        const t0 = Date.now();
+        while (Date.now() - t0 < 1500) {
+          const ok = await r._fill();
+          if (!ok) break;
+          chunks.push(r.leftover());
+          r.buf = new Uint8Array(0);
+        }
+        bodyStr = td.decode(concatBytes(...chunks));
+      }
+    } catch {
+      bodyStr = td.decode(r.leftover());
+    }
     try { sock.close(); } catch {}
     const text = headStr + '\n' + bodyStr;
     const rayM = text.match(/cf-ray:\s*[a-f0-9]+-([A-Z]+)/i);
@@ -583,7 +600,7 @@ function adminPanelHTML() {
   + '<textarea id="speedHosts" style="height:110px"></textarea></div>'
   + '<button class="btn" onclick="runSpeed()">开始测速与识别</button>'
   + '<div id="speedRes" style="margin-top:14px"></div>'
-  + '<p style="color:#888;font-size:13px;margin-top:10px">💡 测速时会读取响应头中的 cf-ray 与 trace 信息识别 Ingress 落地机房 (如 HKG/NRT/SJC)，并自动存入 KV，订阅生成时会自动归类为「🇭🇰 香港」「🇯🇵 日本」「🇺🇸 美国」等地区分组。</p></div>'
+  + '<p style="color:#888;font-size:13px;margin-top:10px">💡 测速时会读取响应头中的 cf-ray 与 trace 信息识别 Ingress 落地机房 (如 HKG/NRT/SJC) 并存入 KV。注意：此处探测的是 Worker 视角的落地机房（基于当前 Worker 执行环境），不同客户端运营商的 Anycast 路由可能略有差异；如需锁定特定地区，可直接在 IP 后追加 <code>#备注</code>（如 <code>1.1.1.1#香港</code>），手动备注优先级最高。</p></div>'
   // 日志 tab
   + '<div class="card page hide" id="p-logs"><h3>连接日志</h3>'
   + '<button class="btn ghost" onclick="loadLogs()">刷新</button>'
@@ -1020,52 +1037,52 @@ function subClash(cfg, url) {
 
     const fullRules = [
       'rules:',
-      '  - DOMAIN-SUFFIX,local,' + q('🎯 全球直连'),
-      '  - DOMAIN-SUFFIX,googleapis.cn,' + q('🌐 谷歌服务'),
-      '  - DOMAIN-SUFFIX,gstatic.com,' + q('🌐 谷歌服务'),
-      '  - DOMAIN-SUFFIX,googlevideo.com,' + q('📹 油管视频'),
-      '  - DOMAIN-SUFFIX,googleusercontent.com,' + q('🌐 谷歌服务'),
-      '  - DOMAIN-KEYWORD,youtube,' + q('📹 油管视频'),
-      '  - DOMAIN-SUFFIX,youtube.com,' + q('📹 油管视频'),
-      '  - DOMAIN-SUFFIX,youtu.be,' + q('📹 油管视频'),
-      '  - DOMAIN-KEYWORD,netflix,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,nflxext.com,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,nflxso.net,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,nflxvideo.net,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,nflximg.com,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,nflximg.net,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,netflix.com,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,netflix.net,' + q('🎬 奈飞视频'),
-      '  - DOMAIN-SUFFIX,bilibili.com,' + q('📺 哔哩哔哩'),
-      '  - DOMAIN-SUFFIX,bilivideo.com,' + q('📺 哔哩哔哩'),
-      '  - DOMAIN-SUFFIX,hdslb.com,' + q('📺 哔哩哔哩'),
-      '  - DOMAIN-KEYWORD,openai,' + q('🤖 OpenAI'),
-      '  - DOMAIN-KEYWORD,chatgpt,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,openai.com,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,chatgpt.com,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,oaistatic.com,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,oaiusercontent.com,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,anthropic.com,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,claude.ai,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,perplexity.ai,' + q('🤖 OpenAI'),
-      '  - DOMAIN-SUFFIX,gemini.google.com,' + q('🤖 OpenAI'),
-      '  - RULE-SET,applications,' + q('🎯 全球直连'),
-      '  - RULE-SET,private,' + q('🎯 全球直连'),
-      '  - RULE-SET,reject,' + q('🛑 全球拦截'),
-      '  - RULE-SET,icloud,' + q('🍎 苹果服务'),
-      '  - RULE-SET,apple,' + q('🍎 苹果服务'),
-      '  - RULE-SET,google,' + q('🌐 谷歌服务'),
-      '  - RULE-SET,proxy,' + q('🚀 节点选择'),
-      '  - RULE-SET,gfw,' + q('🚀 节点选择'),
-      '  - RULE-SET,greatfire,' + q('🚀 节点选择'),
-      '  - RULE-SET,tld-not-cn,' + q('🚀 节点选择'),
-      '  - RULE-SET,direct,' + q('🎯 全球直连'),
-      '  - RULE-SET,lancidr,' + q('🎯 全球直连') + ',no-resolve',
-      '  - RULE-SET,cncidr,' + q('🎯 全球直连') + ',no-resolve',
-      '  - RULE-SET,telegramcidr,' + q('📲 电报信息') + ',no-resolve',
-      '  - GEOIP,LAN,' + q('🎯 全球直连') + ',no-resolve',
-      '  - GEOIP,CN,' + q('🎯 全球直连') + ',no-resolve',
-      '  - MATCH,' + q('🐟 漏网之鱼')
+      '  - DOMAIN-SUFFIX,local,🎯 全球直连',
+      '  - DOMAIN-SUFFIX,googleapis.cn,🌐 谷歌服务',
+      '  - DOMAIN-SUFFIX,gstatic.com,🌐 谷歌服务',
+      '  - DOMAIN-SUFFIX,googlevideo.com,📹 油管视频',
+      '  - DOMAIN-SUFFIX,googleusercontent.com,🌐 谷歌服务',
+      '  - DOMAIN-KEYWORD,youtube,📹 油管视频',
+      '  - DOMAIN-SUFFIX,youtube.com,📹 油管视频',
+      '  - DOMAIN-SUFFIX,youtu.be,📹 油管视频',
+      '  - DOMAIN-KEYWORD,netflix,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,nflxext.com,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,nflxso.net,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,nflxvideo.net,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,nflximg.com,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,nflximg.net,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,netflix.com,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,netflix.net,🎬 奈飞视频',
+      '  - DOMAIN-SUFFIX,bilibili.com,📺 哔哩哔哩',
+      '  - DOMAIN-SUFFIX,bilivideo.com,📺 哔哩哔哩',
+      '  - DOMAIN-SUFFIX,hdslb.com,📺 哔哩哔哩',
+      '  - DOMAIN-KEYWORD,openai,🤖 OpenAI',
+      '  - DOMAIN-KEYWORD,chatgpt,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,openai.com,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,chatgpt.com,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,oaistatic.com,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,oaiusercontent.com,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,anthropic.com,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,claude.ai,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,perplexity.ai,🤖 OpenAI',
+      '  - DOMAIN-SUFFIX,gemini.google.com,🤖 OpenAI',
+      '  - RULE-SET,applications,🎯 全球直连',
+      '  - RULE-SET,private,🎯 全球直连',
+      '  - RULE-SET,reject,🛑 全球拦截',
+      '  - RULE-SET,icloud,🍎 苹果服务',
+      '  - RULE-SET,apple,🍎 苹果服务',
+      '  - RULE-SET,google,🌐 谷歌服务',
+      '  - RULE-SET,proxy,🚀 节点选择',
+      '  - RULE-SET,gfw,🚀 节点选择',
+      '  - RULE-SET,greatfire,🚀 节点选择',
+      '  - RULE-SET,tld-not-cn,🚀 节点选择',
+      '  - RULE-SET,direct,🎯 全球直连',
+      '  - RULE-SET,lancidr,🎯 全球直连,no-resolve',
+      '  - RULE-SET,cncidr,🎯 全球直连,no-resolve',
+      '  - RULE-SET,telegramcidr,📲 电报信息,no-resolve',
+      '  - GEOIP,LAN,🎯 全球直连,no-resolve',
+      '  - GEOIP,CN,🎯 全球直连,no-resolve',
+      '  - MATCH,🐟 漏网之鱼'
     ].join('\n');
 
     yaml =
@@ -1089,13 +1106,13 @@ function subClash(cfg, url) {
       + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT, ' + q('🚀 节点选择') + ']\n'
       + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
       + 'rules:\n'
-      + '  - DOMAIN-SUFFIX,local,' + q('🎯 全球直连') + '\n'
-      + '  - IP-CIDR,192.168.0.0/16,' + q('🎯 全球直连') + ',no-resolve\n'
-      + '  - IP-CIDR,10.0.0.0/8,' + q('🎯 全球直连') + ',no-resolve\n'
-      + '  - IP-CIDR,172.16.0.0/12,' + q('🎯 全球直连') + ',no-resolve\n'
-      + '  - IP-CIDR,127.0.0.0/8,' + q('🎯 全球直连') + ',no-resolve\n'
-      + '  - GEOIP,CN,' + q('🎯 全球直连') + '\n'
-      + '  - MATCH,' + q('🚀 节点选择') + '\n';
+      + '  - DOMAIN-SUFFIX,local,🎯 全球直连\n'
+      + '  - IP-CIDR,192.168.0.0/16,🎯 全球直连,no-resolve\n'
+      + '  - IP-CIDR,10.0.0.0/8,🎯 全球直连,no-resolve\n'
+      + '  - IP-CIDR,172.16.0.0/12,🎯 全球直连,no-resolve\n'
+      + '  - IP-CIDR,127.0.0.0/8,🎯 全球直连,no-resolve\n'
+      + '  - GEOIP,CN,🎯 全球直连\n'
+      + '  - MATCH,🚀 节点选择\n';
   }
   return new Response(yaml, { headers: { 'Content-Type': 'text/yaml;charset=utf-8' } });
 }
@@ -1477,7 +1494,7 @@ async function handleHomeBroadbandSub(cfg, url) {
     '  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
     '  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
     '  - GEOIP,CN,DIRECT',
-    '  - MATCH,' + q(mainGroup),
+    '  - MATCH,' + mainGroup,
     ''
   ].join('\n');
 
