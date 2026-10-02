@@ -523,6 +523,38 @@ export default {
         s.close();
         out.direct443 = `OK (${Date.now() - t0}ms)`;
       } catch (e) { out.direct443 = `FAIL: ${e.message}`; }
+      // a2) 直连 TLS 握手测试 (SNI=example.com)
+      try {
+        const t0 = Date.now();
+        const s = await withTimeout(connect({ hostname: 'example.com', port: 443 }), 8000, 'timeout');
+        const sniB = new TextEncoder().encode('example.com');
+        const ext = new Uint8Array(9 + sniB.length);
+        const ev = new DataView(ext.buffer);
+        ev.setUint16(0, 0x0000); ev.setUint16(2, 5 + sniB.length);
+        ev.setUint16(4, 3 + sniB.length); ext[6] = 0x00;
+        ev.setUint16(7, sniB.length); ext.set(sniB, 9);
+        const helloLen = 2 + 32 + 1 + 2 + 2 + 2 + ext.length;
+        const hello = new Uint8Array(helloLen);
+        const hv = new DataView(hello.buffer);
+        let o2 = 0;
+        hv.setUint16(o2, 0x0303); o2 += 2;
+        crypto.getRandomValues(hello.subarray(o2, o2 + 32)); o2 += 32;
+        hello[o2++] = 0x00;
+        hv.setUint16(o2, 0x002f); o2 += 2;
+        hello[o2++] = 0x01; hello[o2++] = 0x00;
+        hv.setUint16(o2, ext.length); o2 += 2;
+        hello.set(ext, o2);
+        const rec = new Uint8Array(5 + hello.length);
+        rec[0] = 0x16; rec[1] = 0x03; rec[2] = 0x01;
+        new DataView(rec.buffer).setUint16(3, hello.length);
+        rec.set(hello, 5);
+        const w2 = s.writable.getWriter();
+        await w2.write(rec); w2.releaseLock();
+        const r2 = s.readable.getReader();
+        const rd2 = await withTimeout(r2.read(), 8000, 'no response');
+        r2.releaseLock(); s.close();
+        out.directTls = (rd2.value && rd2.value[0] === 0x16) ? `OK (${Date.now() - t0}ms)` : `FAIL: empty`;
+      } catch (e) { out.directTls = `FAIL: ${e.message}`; }
       // b) ProxyIP 解析测试
       if (cfg.proxyip) {
         // b0) SNI 寻路测试: 经 ProxyIP 发 TLS ClientHello, 看能否拿到 ServerHello
