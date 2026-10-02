@@ -1714,6 +1714,7 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs) {
   }
   if (!sess) { ws.close(1008, 'bad request'); return; }
   reader.consume(sess.headerLen);
+  console.log(`[VLESS] header parsed, headerLen=${sess.headerLen}, target=${sess.host}:${sess.port}`);
 
   let dial;
   try {
@@ -1736,7 +1737,10 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs) {
   const writer = sock.writable.getWriter();
   ws.addEventListener('close', () => { try { writer.releaseLock(); } catch {} });
   // 切换为直通模式: 已缓冲的(去掉协议头后)数据先发, 后续消息实时转发
-  reader.setForward(async (d) => { await writer.write(d); });
+  reader.setForward(async (d) => {
+    console.log(`[VLESS] forwarding ${d.length} bytes to target`);
+    await writer.write(d);
+  });
   await pumpSocketToWS(sock, ws, [sess.responsePrefix, dial.leftover]);
 }
 
