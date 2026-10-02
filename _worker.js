@@ -1941,8 +1941,9 @@ async function dialOut(cfg, overrides, host, port) {
     }
     try { return await viaProxy(); } catch { return direct(); } // proxy-first
   }
-  // ProxyIP: TLS 端口时经 ProxyIP 出站 (edgetunnel 做法: DoH 查 TXT 拿真实 IP 列表, 逐个尝试, 全失败回退直连)
-  if (proxyip && TLS_PORTS.includes(port)) {
+  // ProxyIP: 2026-10-02 实测 SNI 寻路无响应, 暂时禁用, 443 走直连
+  // TODO: ProxyIP 服务恢复后可重新启用
+  if (false && proxyip && TLS_PORTS.includes(port)) {
     try {
       const ips = await resolveProxyIPs(cfg, proxyip);
       for (const [ph, pp] of ips) {
