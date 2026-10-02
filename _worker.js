@@ -27,7 +27,7 @@
 
 import { connect } from 'cloudflare:sockets';
 
-/* ============================== 常量 ============================== */
+/* ============================== 常量与地区定义 ============================== */
 
 // 默认优选: CF 官方 IP 段(甬哥「不死 IP」理念: 默认就能用, 不用天天更新)
 const DEFAULT_PREFERRED_IPS = [
@@ -35,6 +35,38 @@ const DEFAULT_PREFERRED_IPS = [
   '104.21.0.0', '104.22.0.0', '104.24.0.0', '104.25.0.0', '104.26.0.0',
   '104.27.0.0', '172.66.0.0', '172.67.0.0', '162.159.0.0',
 ];
+
+// 常见落地机房与地区分类 (Ingress 机场码 / Colo 识别)
+const REGIONS = [
+  { code: 'HK', name: '香港节点', flag: '🇭🇰', match: /香港|HK|Hong\s*Kong|HKG/i, colos: ['HKG'] },
+  { code: 'JP', name: '日本节点', flag: '🇯🇵', match: /日本|东京|大阪|JP|Japan|Tokyo|Osaka|NRT|HND|KIX|FUK|OKA|CTS/i, colos: ['NRT', 'HND', 'KIX', 'FUK', 'OKA', 'CTS'] },
+  { code: 'US', name: '美国节点', flag: '🇺🇸', match: /美国|美区|US|USA|United\s*States|America|SJC|LAX|SFO|ORD|IAD|EWR|JFK|SEA|ATL|DFW|DEN|PHX|MIA|BOS/i, colos: ['SJC', 'LAX', 'SFO', 'ORD', 'IAD', 'EWR', 'JFK', 'SEA', 'ATL', 'DFW', 'DEN', 'PHX', 'MIA', 'BOS', 'CLT', 'IAH', 'DTW', 'MSP'] },
+  { code: 'SG', name: '新加坡节点', flag: '🇸🇬', match: /新加坡|狮城|SG|Singapore|SIN/i, colos: ['SIN'] },
+  { code: 'TW', name: '台湾节点', flag: '🇨🇳', match: /台湾|台北|TW|Taiwan|Taipei|TPE|KHH/i, colos: ['TPE', 'KHH'] },
+  { code: 'KR', name: '韩国节点', flag: '🇰🇷', match: /韩国|首尔|KR|Korea|Seoul|ICN/i, colos: ['ICN'] },
+  { code: 'DE', name: '德国节点', flag: '🇩🇪', match: /德国|DE|Germany|Frankfurt|Berlin|FRA|BER|MUC/i, colos: ['FRA', 'BER', 'MUC', 'DUS'] },
+  { code: 'UK', name: '英国节点', flag: '🇬🇧', match: /英国|UK|GB|Britain|London|LHR|MAN/i, colos: ['LHR', 'MAN', 'EDI'] },
+];
+
+function identifyRegion(remark, coloInfo) {
+  // 1. 用户手动备注优先级最高 (#香港, #JP, #美国等)
+  if (remark) {
+    for (const reg of REGIONS) {
+      if (reg.match.test(remark)) return reg;
+    }
+  }
+  // 2. 本地测速记录的 Ingress 落地机场码 / 地区 (从 KV 读)
+  if (coloInfo) {
+    const loc = (coloInfo.loc || '').toUpperCase();
+    const colo = (coloInfo.colo || '').toUpperCase();
+    for (const reg of REGIONS) {
+      if (loc && (loc === reg.code || (reg.code === 'UK' && loc === 'GB'))) return reg;
+      if (colo && reg.colos.includes(colo)) return reg;
+    }
+  }
+  return null;
+}
+
 const TLS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 const PLAIN_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
 const WS_TIMEOUT_MS = 10000;
@@ -44,6 +76,85 @@ const DIAL_TIMEOUT_MS = 8000;
 
 const te = new TextEncoder();
 const td = new TextDecoder();
+
+/* ---- TCP Socket 定长/定界读取器 ---- */
+class SocketReader {
+  constructor(readable) {
+    this.reader = readable.getReader();
+    this.buf = new Uint8Array(0);
+    this.eof = false;
+  }
+  async _fill() {
+    if (this.eof) return false;
+    const { done, value } = await this.reader.read();
+    if (done) { this.eof = true; return false; }
+    const nb = new Uint8Array(this.buf.length + value.length);
+    nb.set(this.buf); nb.set(value, this.buf.length);
+    this.buf = nb;
+    return true;
+  }
+  async readExactly(n, timeoutMs = 8000) {
+    const t0 = Date.now();
+    while (this.buf.length < n) {
+      if (Date.now() - t0 > timeoutMs) throw new Error('read timeout');
+      if (!await this._fill()) throw new Error('unexpected eof');
+    }
+    const out = this.buf.slice(0, n);
+    this.buf = this.buf.slice(n);
+    return out;
+  }
+  async readUntil(delim, maxLen = 8192, timeoutMs = 8000) {
+    const t0 = Date.now();
+    for (;;) {
+      const idx = findSub(this.buf, delim);
+      if (idx >= 0) {
+        const out = this.buf.slice(0, idx + delim.length);
+        this.buf = this.buf.slice(idx + delim.length);
+        return out;
+      }
+      if (this.buf.length > maxLen) throw new Error('header too large');
+      if (Date.now() - t0 > timeoutMs) throw new Error('read timeout');
+      if (!await this._fill()) throw new Error('unexpected eof');
+    }
+  }
+  leftover() { return this.buf; }
+  release() { try { this.reader.releaseLock(); } catch {} }
+}
+function findSub(buf, sub) {
+  outer: for (let i = 0; i + sub.length <= buf.length; i++) {
+    for (let j = 0; j < sub.length; j++) if (buf[i + j] !== sub[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+// 探测目标 IP 的 Cloudflare Ingress 落地机房 (Colo / 机场码)
+async function probeColo(host) {
+  try {
+    const sock = await withTimeout(connect({ hostname: host, port: 80 }), 3000, 'timeout');
+    const w = sock.writable.getWriter();
+    await w.write(te.encode('GET /cdn-cgi/trace HTTP/1.1\r\nHost: cloudflare.com\r\nConnection: close\r\n\r\n'));
+    w.releaseLock();
+    const r = new SocketReader(sock.readable);
+    const head = await r.readUntil(te.encode('\r\n\r\n'), 4096, 3000);
+    const headStr = td.decode(head);
+    let bodyStr = '';
+    try {
+      const bodyBytes = await r.readExactly(256, 1500);
+      bodyStr = td.decode(bodyBytes);
+    } catch {}
+    try { sock.close(); } catch {}
+    const text = headStr + '\n' + bodyStr;
+    const rayM = text.match(/cf-ray:\s*[a-f0-9]+-([A-Z]+)/i);
+    const coloM = text.match(/colo=([A-Z]+)/i);
+    const locM = text.match(/loc=([A-Z]+)/i);
+    const colo = (rayM ? rayM[1] : (coloM ? coloM[1] : null))?.toUpperCase() || null;
+    const loc = (locM ? locM[1] : null)?.toUpperCase() || null;
+    return { colo, loc };
+  } catch {
+    return { colo: null, loc: null };
+  }
+}
 
 function b64encodeUnicode(s) {
   return btoa(String.fromCharCode(...te.encode(s)));
@@ -84,6 +195,19 @@ function parseHostPort(s, defaultPort) {
   m = s.match(/^(.*):(\d+)$/);
   if (m && !m[1].includes(':')) return { host: m[1], port: +m[2] };
   return { host: s, port: defaultPort };
+}
+function parseNodeItem(raw) {
+  let str = String(raw || '').trim();
+  let remark = '';
+  const hashIdx = str.indexOf('#');
+  if (hashIdx >= 0) {
+    remark = str.slice(hashIdx + 1).trim();
+    str = str.slice(0, hashIdx).trim();
+  }
+  const hp = parseHostPort(str, null);
+  const ip = hp ? hp.host : str;
+  const port = hp && hp.port ? hp.port : null;
+  return { ip, explicitPort: port, remark };
 }
 // socks5://user:pass@host:port | http://user:pass@host:port | user:pass@host:port(默认 socks5)
 function parseProxyUrl(s) {
@@ -187,6 +311,7 @@ async function getConfig(env) {
   if (_cfgCache && now - _cfgCacheAt < 30000) return _cfgCache;
 
   const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
+  const coloMap = (await kvGetJSON(env, 'cfu:colos')) || {};
   let uuid = kvc.uuid || env.UUID || '';
   if (!isValidUUID(uuid)) {
     if (_memUUID && isValidUUID(_memUUID)) uuid = _memUUID;
@@ -212,6 +337,7 @@ async function getConfig(env) {
     preferredIps: Array.isArray(kvc.preferredIps) && kvc.preferredIps.length ? kvc.preferredIps : DEFAULT_PREFERRED_IPS.slice(),
     maxNodes: Math.min(Math.max(+kvc.maxNodes || +env.MAX_NODES || 24, 1), 200),
     logConn: kvc.logConn ?? envFlag(env.LOG_CONN, false),
+    coloMap,
     _trojanHash: '', // 懒加载
   };
   _cfgCache = cfg; _cfgCacheAt = now;
@@ -444,11 +570,12 @@ function adminPanelHTML() {
   + '<button class="btn" onclick="saveIps()">保存</button>'
   + '<button class="btn ghost" onclick="defaultIps()">恢复默认官方 IP</button></div>'
   // 测速 tab
-  + '<div class="card page hide" id="p-speed"><h3>延迟测试 (服务端 TCP 建连耗时)</h3>'
-  + '<div class="f"><label>测试目标 (每行一个, 格式 ip 或 ip:端口, 最多 20 个)</label>'
+  + '<div class="card page hide" id="p-speed"><h3>延迟测试与落地机房识别</h3>'
+  + '<div class="f"><label>测试目标 (每行一个, 格式 ip 或 ip:端口 或 ip#备注, 最多 30 个)</label>'
   + '<textarea id="speedHosts" style="height:110px"></textarea></div>'
-  + '<button class="btn" onclick="runSpeed()">开始测试</button>'
-  + '<div id="speedRes" style="margin-top:14px"></div></div>'
+  + '<button class="btn" onclick="runSpeed()">开始测速与识别</button>'
+  + '<div id="speedRes" style="margin-top:14px"></div>'
+  + '<p style="color:#888;font-size:13px;margin-top:10px">💡 测速时会读取响应头中的 cf-ray 与 trace 信息识别 Ingress 落地机房 (如 HKG/NRT/SJC)，并自动存入 KV，订阅生成时会自动归类为「🇭🇰 香港」「🇯🇵 日本」「🇺🇸 美国」等地区分组。</p></div>'
   // 日志 tab
   + '<div class="card page hide" id="p-logs"><h3>连接日志</h3>'
   + '<button class="btn ghost" onclick="loadLogs()">刷新</button>'
@@ -511,12 +638,15 @@ function adminPanelHTML() {
   + '.then(function(){showMsg("优选 IP 已保存",true);}).catch(function(e){showMsg(e.message,false);});}'
   + 'function defaultIps(){api("ips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reset:true})})'
   + '.then(function(d){document.getElementById("ips").value=(d.ips||[]).join("\\n");showMsg("已恢复默认",true);});}'
-  + 'function runSpeed(){var hosts=document.getElementById("speedHosts").value.split("\\n").map(function(s){return s.trim()}).filter(Boolean).slice(0,20);'
-  + 'if(!hosts.length)return;document.getElementById("speedRes").innerHTML="测试中...";'
+  + 'function runSpeed(){var hosts=document.getElementById("speedHosts").value.split("\\n").map(function(s){return s.trim()}).filter(Boolean).slice(0,30);'
+  + 'if(!hosts.length)return;document.getElementById("speedRes").innerHTML="测速与识别落地机房中...";'
   + 'api("latency",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hosts:hosts})})'
   + '.then(function(d){var rows=d.results.map(function(r){'
-  + 'return "<tr><td class=\\"mono\\">"+esc(r.host)+"</td><td>"+(r.ms==null?("失败"):("<b>"+r.ms+" ms</b>"))+"</td></tr>";}).join("");'
-  + 'document.getElementById("speedRes").innerHTML="<table><tr><th>目标</th><th>延迟</th></tr>"+rows+"</table>";})'
+  + 'var msText=r.ms==null?("<span style=\\\"color:#f5222d\\\">失败</span>"):("<b>"+r.ms+" ms</b>");'
+  + 'var coloText=r.colo?("<span style=\\\"background:#e6f4ff;color:#0958d9;padding:2px 6px;border-radius:4px;font-family:monospace;font-weight:600\\\">"+esc(r.colo)+"</span>"):("-");'
+  + 'var regText=r.region?esc(r.region):("-");'
+  + 'return "<tr><td class=\\"mono\\">"+esc(r.host)+"</td><td>"+msText+"</td><td>"+coloText+"</td><td>"+regText+"</td></tr>";}).join("");'
+  + 'document.getElementById("speedRes").innerHTML="<table><tr><th>目标</th><th>延迟</th><th>落地机房 (Colo)</th><th>地区</th></tr>"+rows+"</table>";})'
   + '.catch(function(e){showMsg(e.message,false);});}'
   + 'function loadLogs(){api("logs").then(function(d){var rows=(d.logs||[]).map(function(l){'
   + 'return "<tr><td class=\\"mono\\">"+esc(l.t)+"</td><td>"+esc(l.proto)+"</td><td class=\\"mono\\">"+esc(l.target)+"</td></tr>";}).join("");'
@@ -607,21 +737,60 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
     });
   }
 
-  // 延迟测试: 服务端对目标 TCP 建连计时 (cfnew 内置测速的服务端版)
+  // 延迟测试: 服务端对目标 TCP 建连计时 + 自动识别 Cloudflare Ingress 落地机房 (Colo/机场码)
   if (action === 'latency' && request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
-    const hosts = (body.hosts || []).map(s => String(s).trim()).filter(Boolean).slice(0, 20);
-    const results = await Promise.all(hosts.map(async (h) => {
-      const hp = parseHostPort(h, 443);
-      if (!hp) return { host: h, ms: null };
+    const hosts = (body.hosts || []).map(s => String(s).trim()).filter(Boolean).slice(0, 30);
+    const coloCache = (await kvGetJSON(env, 'cfu:colos')) || {};
+    let coloUpdated = false;
+
+    const results = await Promise.all(hosts.map(async (raw) => {
+      const item = parseNodeItem(raw);
+      if (!item.ip) return { host: raw, ms: null, colo: null, loc: null, region: null };
+      const hp = parseHostPort(item.ip, item.explicitPort || 443);
+      if (!hp) return { host: raw, ms: null, colo: null, loc: null, region: null };
+
       const t0 = Date.now();
       try {
         const sock = await withTimeout(connect({ hostname: hp.host, port: hp.port }), 4000, 'timeout');
+        const ms = Date.now() - t0;
         try { sock.close(); } catch {}
-        return { host: h, ms: Date.now() - t0 };
-      } catch { return { host: h, ms: null }; }
+
+        let info = coloCache[hp.host];
+        if (!info || (Date.now() - (info.t || 0) > 86400000)) {
+          const probe = await probeColo(hp.host);
+          if (probe.colo) {
+            info = { colo: probe.colo, loc: probe.loc, t: Date.now() };
+            coloCache[hp.host] = info;
+            coloUpdated = true;
+          }
+        }
+        const reg = identifyRegion(item.remark, info);
+        return {
+          host: raw,
+          ms,
+          colo: info?.colo || null,
+          loc: info?.loc || null,
+          region: reg ? `${reg.flag} ${reg.name.replace('节点', '')}` : null
+        };
+      } catch {
+        const info = coloCache[hp.host];
+        const reg = identifyRegion(item.remark, info);
+        return {
+          host: raw,
+          ms: null,
+          colo: info?.colo || null,
+          loc: info?.loc || null,
+          region: reg ? `${reg.flag} ${reg.name.replace('节点', '')}` : null
+        };
+      }
     }));
+
+    if (coloUpdated && env.KV) {
+      await kvPut(env, 'cfu:colos', JSON.stringify(coloCache));
+      clearConfigCache();
+    }
     results.sort((a, b) => (a.ms ?? 1e9) - (b.ms ?? 1e9));
     return json({ results });
   }
@@ -657,19 +826,39 @@ function buildNodes(cfg, host) {
   const key = cfg.customPath || cfg.subKey;
   const path = '/' + key;
   const ips = cfg.preferredIps && cfg.preferredIps.length ? cfg.preferredIps : DEFAULT_PREFERRED_IPS;
-  const descs = [{ name: 'CF-直连', ip: host, port: 443, tls: true }];
+  const coloMap = cfg.coloMap || {};
+  const descs = [{ name: 'CF-直连', ip: host, port: 443, tls: true, regionCode: null }];
   let n = 0;
   outer:
-  for (const ip of ips) {
-    for (const port of [443, 80]) {
+  for (const raw of ips) {
+    const item = parseNodeItem(raw);
+    if (!item.ip) continue;
+    const ports = item.explicitPort ? [item.explicitPort] : [443, 80];
+    const coloInfo = coloMap[item.ip];
+    const reg = identifyRegion(item.remark, coloInfo);
+    for (const port of ports) {
       if (descs.length >= cfg.maxNodes) break outer;
       n++;
-      const short = String(ip).replace(/[^0-9a-z]/gi, '').slice(-6) || ('x' + n);
-      descs.push({ name: 'CF优选-' + short + '-' + n, ip: String(ip), port, tls: port === 443 });
+      const short = item.ip.replace(/[^0-9a-z]/gi, '').slice(-6) || ('x' + n);
+      let nodeName;
+      if (item.remark) {
+        nodeName = `${reg ? reg.flag + ' ' : ''}${item.remark}-${port}`;
+      } else if (coloInfo && coloInfo.colo) {
+        nodeName = `${reg ? reg.flag + ' ' : ''}CF优选-${coloInfo.colo}-${short}-${port}`;
+      } else {
+        nodeName = `${reg ? reg.flag + ' ' : ''}CF优选-${short}-${port}`;
+      }
+      descs.push({
+        name: nodeName,
+        ip: item.ip,
+        port,
+        tls: TLS_PORTS.includes(port),
+        regionCode: reg ? reg.code : null,
+      });
     }
   }
   return descs.map(d => ({
-    name: d.name, ip: d.ip, port: d.port, tls: d.tls,
+    name: d.name, ip: d.ip, port: d.port, tls: d.tls, regionCode: d.regionCode,
     vless: vlessLink(cfg, host, path, d),
     trojan: trojanLink(cfg, host, path, d),
     ss: ssLink(cfg, d),
@@ -744,6 +933,30 @@ function subClash(cfg, url) {
   }
   const nameList = allNames.length ? allNames.map(q).join(', ') : 'DIRECT';
 
+  // 地区分组
+  const regionGroupBlocks = [];
+  const activeRegionNames = [];
+  const regionMap = {};
+  for (const reg of REGIONS) {
+    const rProxies = [];
+    for (const n of nodes) {
+      if (n.regionCode === reg.code) {
+        if (cfg.pVless) rProxies.push(q(n.name + '-vless'));
+        if (cfg.pTrojan) rProxies.push(q(n.name + '-trojan'));
+      }
+    }
+    if (rProxies.length > 0) {
+      const gName = `${reg.flag} ${reg.name}`;
+      activeRegionNames.push(gName);
+      regionMap[reg.code] = gName;
+      regionGroupBlocks.push(
+        '  - name: ' + q(gName) + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + rProxies.join(', ') + ']'
+      );
+    }
+  }
+  const regList = activeRegionNames.map(q).join(', ');
+  const mainProxies = [q('♻️ 自动选择'), ...(regList ? [regList] : []), nameList, q('🎯 全球直连')].join(', ');
+
   let yaml = '';
   if (isFull) {
     const loyalsoldierBase = 'https://fastly.jsdelivr.net/gh/Loyalsoldier/clash-rules@release';
@@ -768,22 +981,27 @@ function subClash(cfg, url) {
       provider('applications', 'classical')
     ].join('\n');
 
+    const openAiRegions = ['US', 'JP', 'SG'].map(c => regionMap[c]).filter(Boolean).map(q);
+    const netflixRegions = ['HK', 'JP', 'SG', 'US'].map(c => regionMap[c]).filter(Boolean).map(q);
+    const biliRegions = ['HK', 'TW'].map(c => regionMap[c]).filter(Boolean).map(q);
+
     const fullGroups = [
       'proxy-groups:',
-      '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']',
       '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']',
-      '  - name: ' + q('🌍 国外媒体') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
-      '  - name: ' + q('📺 哔哩哔哩') + '\n    type: select\n    proxies: [' + q('🎯 全球直连') + ', ' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ']',
-      '  - name: ' + q('📹 油管视频') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('🌍 国外媒体') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
-      '  - name: ' + q('🎬 奈飞视频') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('🌍 国外媒体') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
-      '  - name: ' + q('📲 电报信息') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
-      '  - name: ' + q('🌐 谷歌服务') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
-      '  - name: ' + q('🤖 OpenAI') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
-      '  - name: ' + q('Ⓜ️ 微软服务') + '\n    type: select\n    proxies: [' + q('🎯 全球直连') + ', ' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ']',
-      '  - name: ' + q('🍎 苹果服务') + '\n    type: select\n    proxies: [' + q('🎯 全球直连') + ', ' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ']',
+      ...(regionGroupBlocks.length ? regionGroupBlocks : []),
+      '  - name: ' + q('🌍 国外媒体') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('📺 哔哩哔哩') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), ...biliRegions, q('🚀 节点选择'), q('♻️ 自动选择'), nameList].join(', ') + ']',
+      '  - name: ' + q('📹 油管视频') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('🌍 国外媒体'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('🎬 奈飞视频') + '\n    type: select\n    proxies: [' + [...netflixRegions, q('🚀 节点选择'), q('🌍 国外媒体'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('📲 电报信息') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('🌐 谷歌服务') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('🤖 OpenAI') + '\n    type: select\n    proxies: [' + [...openAiRegions, q('🚀 节点选择'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('Ⓜ️ 微软服务') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList].join(', ') + ']',
+      '  - name: ' + q('🍎 苹果服务') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList].join(', ') + ']',
       '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]',
       '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]',
-      '  - name: ' + q('🐟 漏网之鱼') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']'
+      '  - name: ' + q('🐟 漏网之鱼') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']'
     ].join('\n');
 
     const fullRules = [
@@ -851,8 +1069,9 @@ function subClash(cfg, url) {
       + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - 223.5.5.5\n    - 8.8.8.8\n'
       + 'proxies:\n' + proxies.join('\n') + '\n'
       + 'proxy-groups:\n'
-      + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']\n'
+      + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']\n'
       + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']\n'
+      + (regionGroupBlocks.length ? regionGroupBlocks.join('\n') + '\n' : '')
       + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT, ' + q('🚀 节点选择') + ']\n'
       + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
       + 'rules:\n'
@@ -895,6 +1114,32 @@ function subSingbox(cfg, url) {
     }
   }
 
+  // 地区分组
+  const regionOutbounds = [];
+  const activeRegionTags = [];
+  const regionTagMap = {};
+  for (const reg of REGIONS) {
+    const rTags = [];
+    for (const n of nodes) {
+      if (n.regionCode === reg.code) {
+        if (cfg.pVless) rTags.push(n.name + '-vless');
+        if (cfg.pTrojan) rTags.push(n.name + '-trojan');
+      }
+    }
+    if (rTags.length > 0) {
+      const gTag = `${reg.flag} ${reg.name}`;
+      activeRegionTags.push(gTag);
+      regionTagMap[reg.code] = gTag;
+      regionOutbounds.push({
+        type: 'urltest',
+        tag: gTag,
+        outbounds: rTags,
+        url: 'http://www.gstatic.com/generate_204',
+        interval: '5m'
+      });
+    }
+  }
+
   let conf;
   if (isFull) {
     const srsSite = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite';
@@ -909,20 +1154,25 @@ function subSingbox(cfg, url) {
       sRule('geolocation-!cn'), sRule('category-ads-all'), iRule('cn'), iRule('private'), iRule('telegram')
     ];
 
+    const openAiRegions = ['US', 'JP', 'SG'].map(c => regionTagMap[c]).filter(Boolean);
+    const netflixRegions = ['HK', 'JP', 'SG', 'US'].map(c => regionTagMap[c]).filter(Boolean);
+    const biliRegions = ['HK', 'TW'].map(c => regionTagMap[c]).filter(Boolean);
+
     const fullOutbounds = [
-      { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...tags, 'direct'], default: '♻️ 自动选择' },
+      { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...activeRegionTags, ...tags, 'direct'], default: '♻️ 自动选择' },
       { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
-      { type: 'selector', tag: '🌍 国外媒体', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
-      { type: 'selector', tag: '📲 电报信息', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
-      { type: 'selector', tag: '🌐 谷歌服务', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
-      { type: 'selector', tag: '🤖 OpenAI', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
-      { type: 'selector', tag: 'Ⓜ️ 微软服务', outbounds: ['direct', '🚀 节点选择', '♻️ 自动选择', ...tags] },
-      { type: 'selector', tag: '🍎 苹果服务', outbounds: ['direct', '🚀 节点选择', '♻️ 自动选择', ...tags] },
-      { type: 'selector', tag: '📺 哔哩哔哩', outbounds: ['direct', '🚀 节点选择', '♻️ 自动选择', ...tags] },
-      { type: 'selector', tag: '📹 油管视频', outbounds: ['🚀 节点选择', '🌍 国外媒体', '♻️ 自动选择', 'direct', ...tags] },
-      { type: 'selector', tag: '🎬 奈飞视频', outbounds: ['🚀 节点选择', '🌍 国外媒体', '♻️ 自动选择', 'direct', ...tags] },
+      ...regionOutbounds,
+      { type: 'selector', tag: '🌍 国外媒体', outbounds: ['🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '📲 电报信息', outbounds: ['🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🌐 谷歌服务', outbounds: ['🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🤖 OpenAI', outbounds: [...openAiRegions, '🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: 'Ⓜ️ 微软服务', outbounds: ['direct', '🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', ...tags] },
+      { type: 'selector', tag: '🍎 苹果服务', outbounds: ['direct', '🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', ...tags] },
+      { type: 'selector', tag: '📺 哔哩哔哩', outbounds: ['direct', ...biliRegions, '🚀 节点选择', '♻️ 自动选择', ...tags] },
+      { type: 'selector', tag: '📹 油管视频', outbounds: ['🚀 节点选择', ...activeRegionTags, '🌍 国外媒体', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🎬 奈飞视频', outbounds: [...netflixRegions, '🚀 节点选择', '🌍 国外媒体', '♻️ 自动选择', 'direct', ...tags] },
       { type: 'selector', tag: '🎯 全球直连', outbounds: ['direct'] },
-      { type: 'selector', tag: '🐟 漏网之鱼', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🐟 漏网之鱼', outbounds: ['🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', 'direct', ...tags] },
       ...outbounds,
       { type: 'direct', tag: 'direct' },
       { type: 'block', tag: 'block' },
@@ -969,8 +1219,9 @@ function subSingbox(cfg, url) {
     };
   } else {
     outbounds.push(
-      { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...tags, 'direct'] },
+      { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...activeRegionTags, ...tags, 'direct'] },
       { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
+      ...regionOutbounds,
       { type: 'direct', tag: 'direct' },
       { type: 'block', tag: 'block' },
     );
@@ -1352,53 +1603,3 @@ async function connectViaHttp(p, host, port) {
   return { sock, leftover };
 }
 
-/* ---- TCP Socket 定长/定界读取器(握手阶段用) ---- */
-class SocketReader {
-  constructor(readable) {
-    this.reader = readable.getReader();
-    this.buf = new Uint8Array(0);
-    this.eof = false;
-  }
-  async _fill() {
-    if (this.eof) return false;
-    const { done, value } = await this.reader.read();
-    if (done) { this.eof = true; return false; }
-    const nb = new Uint8Array(this.buf.length + value.length);
-    nb.set(this.buf); nb.set(value, this.buf.length);
-    this.buf = nb;
-    return true;
-  }
-  async readExactly(n, timeoutMs = 8000) {
-    const t0 = Date.now();
-    while (this.buf.length < n) {
-      if (Date.now() - t0 > timeoutMs) throw new Error('read timeout');
-      if (!await this._fill()) throw new Error('unexpected eof');
-    }
-    const out = this.buf.slice(0, n);
-    this.buf = this.buf.slice(n);
-    return out;
-  }
-  async readUntil(delim, maxLen = 8192, timeoutMs = 8000) {
-    const t0 = Date.now();
-    for (;;) {
-      const idx = findSub(this.buf, delim);
-      if (idx >= 0) {
-        const out = this.buf.slice(0, idx + delim.length);
-        this.buf = this.buf.slice(idx + delim.length);
-        return out;
-      }
-      if (this.buf.length > maxLen) throw new Error('header too large');
-      if (Date.now() - t0 > timeoutMs) throw new Error('read timeout');
-      if (!await this._fill()) throw new Error('unexpected eof');
-    }
-  }
-  leftover() { return this.buf; }
-  release() { try { this.reader.releaseLock(); } catch {} }
-}
-function findSub(buf, sub) {
-  outer: for (let i = 0; i + sub.length <= buf.length; i++) {
-    for (let j = 0; j < sub.length; j++) if (buf[i + j] !== sub[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
