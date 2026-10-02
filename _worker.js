@@ -1946,6 +1946,34 @@ function parseSsHeader(buf) {
 
 /* ============================== 出站拨号 ============================== */
 
+// Cloudflare 官方 IP 段 (https://www.cloudflare.com/ips/)
+// Worker 不能直连这些 IP, 必须经 ProxyIP 跳板
+const CF_IPV4_RANGES = [
+  '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+  '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+  '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+  '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'
+];
+function _ipv4ToInt(ip) {
+  const p = ip.split('.');
+  if (p.length !== 4) return -1;
+  let n = 0;
+  for (const o of p) { const v = parseInt(o, 10); if (isNaN(v) || v < 0 || v > 255) return -1; n = (n << 8) + v; }
+  return n >>> 0;
+}
+function isCloudflareIP(ip) {
+  if (!ip || ip.includes(':')) return false; // IPv6 暂不检测
+  const ipInt = _ipv4ToInt(ip);
+  if (ipInt < 0) return false;
+  for (const cidr of CF_IPV4_RANGES) {
+    const [base, bitsStr] = cidr.split('/');
+    const baseInt = _ipv4ToInt(base);
+    const bits = parseInt(bitsStr, 10);
+    const mask = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
+    if ((ipInt & mask) === (baseInt & mask)) return true;
+  }
+  return false;
+}
 async function dialOut(cfg, overrides, host, port) {
   const outboundStr = (overrides.outbound || cfg.outbound || '').trim();
   const mode = cfg.outboundMode || 'proxy-first';
@@ -1972,18 +2000,36 @@ async function dialOut(cfg, overrides, host, port) {
     }
     try { return await viaProxy(); } catch { return direct(); } // proxy-first
   }
-  // ProxyIP: 2026-10-02 实测 SNI 寻路无响应, 暂时禁用, 443 走直连
-  // TODO: ProxyIP 服务恢复后可重新启用
-  if (false && proxyip && TLS_PORTS.includes(port)) {
+  // ProxyIP: 仅当目标为 Cloudflare IP 段时使用
+  // 原理: CF 官方限制 Worker 不能直连 CF 自有 IP 段 (TCP sockets to CF ranges blocked),
+  // 需经第三方 ProxyIP 跳板: Worker -> ProxyIP(非CF) -> CF目标。
+  // 跳板机从客户端 TLS ClientHello 明文 SNI 识别目标, 盲转发字节到 CF 边缘。
+  // 非 CF 目标走直连 (更快)。Worker 全程只做 TCP 管道, 不参与 TLS 握手。
+  // 参考: https://github.com/suprev/CF-Workers-CheckProxyIP
+  if (proxyip && TLS_PORTS.includes(port)) {
+    let targetIsCF = false;
     try {
-      const ips = await resolveProxyIPs(cfg, proxyip);
-      for (const [ph, pp] of ips) {
-        try {
-          const sock = await withTimeout(connect({ hostname: ph, port: pp }), DIAL_TIMEOUT_MS, 'proxyip dial timeout');
-          return { sock, leftover: new Uint8Array(0) };
-        } catch (e) { /* 换下一个 IP */ }
+      if (_isIPAddr(host)) {
+        targetIsCF = isCloudflareIP(host);
+      } else {
+        // 域名: DoH 查 A 记录判断是否为 CF IP
+        const dohUrl = 'https://cloudflare-dns.com/dns-query';
+        const aRecs = await _dohQuery(dohUrl, host, 'A');
+        targetIsCF = aRecs.some(isCloudflareIP);
       }
-    } catch (e) { /* 解析失败, 回退直连 */ }
+    } catch (e) { /* 解析失败则默认直连 */ }
+    if (targetIsCF) {
+      try {
+        const ips = await resolveProxyIPs(cfg, proxyip);
+        for (const [ph, pp] of ips) {
+          try {
+            const sock = await withTimeout(connect({ hostname: ph, port: pp }), DIAL_TIMEOUT_MS, 'proxyip dial timeout');
+            return { sock, leftover: new Uint8Array(0) };
+          } catch (e) { /* 换下一个 IP */ }
+        }
+      } catch (e) { /* 解析失败, 回退直连 */ }
+      // ProxyIP 全失败则回退直连 (尽力而为)
+    }
   }
   return direct();
 }
