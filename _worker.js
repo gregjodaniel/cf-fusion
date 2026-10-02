@@ -233,7 +233,7 @@ async function resolveProxyIPs(cfg, proxyip) {
   const now = Date.now();
   const cached = _proxyIPCache.get(proxyip);
   if (cached && cached.expire > now) return cached.ips;
-  const dohUrl = cfg.doh || 'https://dns.google/dns-query';
+  const dohUrl = cfg.doh || 'https://cloudflare-dns.com/dns-query';
   const out = [];
   for (const entry of proxyip.split(',').map(s => s.trim()).filter(Boolean)) {
     const hp = parseHostPort(entry, 443);
@@ -409,7 +409,7 @@ async function getConfig(env) {
     outbound: (kvc.outbound || env.OUTBOUND || '').trim(),
     outboundMode: kvc.outboundMode || env.OUTBOUND_MODE || 'proxy-first',
     fakeUrl: kvc.fakeUrl || env.FAKE_URL || '',
-    doh: kvc.doh || env.DOH || 'https://dns.google/dns-query',
+    doh: kvc.doh || env.DOH || 'https://cloudflare-dns.com/dns-query',
     pVless: kvc.pVless ?? envFlag(env.P_VLESS, true),
     pTrojan: kvc.pTrojan ?? envFlag(env.P_TROJAN, true),
     pSs: kvc.pSs ?? envFlag(env.P_SS, false),
