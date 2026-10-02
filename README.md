@@ -1,12 +1,13 @@
 # cf-fusion
 
-集三家所长的一体化 Cloudflare 边缘代理脚本（单文件 `_worker.js`，零依赖）：
+集百家所长的一体化 Cloudflare 边缘代理脚本（单文件 `_worker.js`，零依赖）：
 
-| 来源 | 取其所长 |
+| 来源 | 角色与汲取所长 |
 |---|---|
-| [byJoey/cfnew](https://github.com/byJoey/cfnew) | 多协议、图形化 KV 配置（改完即生效）、订阅本地自生成、自定义路径、出站代理 |
-| [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel) | `/admin` 管理后台、PATH 动态切换底层代理、连接日志 |
-| [yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan) | 本地化部署（不依赖第三方订阅转换）、默认 CF 官方优选 IP、单节点 path 改 proxyip |
+| [zizifn/edgetunnel](https://github.com/zizifn/edgetunnel) | **开山鼻祖**：奠定了 Cloudflare Workers 原生 TCP Sockets 实现 VLESS over WS 的技术基石 |
+| [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel) | PATH 动态切换底层代理、ProxyIP 机制与优选网络生态 |
+| [yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan) | 本地化部署（不依赖第三方订阅转换）、多协议扩展与 101 握手抗阻断 |
+| [byJoey/cfnew](https://github.com/byJoey/cfnew) | 图形化 KV 管理面板（改完即生效）、延迟测速与家宽链式探索 |
 
 ## 功能
 
@@ -158,6 +159,7 @@ Cloudflare 边缘机房 (cf-fusion 优选前置节点)
 
 ## 致谢
 
-- [byJoey/cfnew](https://github.com/byJoey/cfnew)
-- [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel)
-- [yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan)
+- [zizifn/edgetunnel](https://github.com/zizifn/edgetunnel) — **开山鼻祖**：奠定了在 Cloudflare Workers 上实现 VLESS 代理的基石
+- [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel) — 完善了 ProxyIP 机制与海量优选节点生态
+- [yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan) — 提供了多协议扩展与本地零泄露订阅的稳健实践
+- [byJoey/cfnew](https://github.com/byJoey/cfnew) — 带来了现代化的 KV 管理面板、测速机制与链式探索
