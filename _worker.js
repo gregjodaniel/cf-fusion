@@ -1406,7 +1406,7 @@ function subSingbox(cfg, url) {
 
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query' }] },
+      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query', domain_resolver: 'bootstrap' }] },
       outbounds: fullOutbounds,
       route: {
         default_http_client: 'http-direct',
@@ -1429,7 +1429,7 @@ function subSingbox(cfg, url) {
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query' }] },
+      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query', domain_resolver: 'bootstrap' }] },
       outbounds,
       route: {
         default_http_client: 'http-direct',
