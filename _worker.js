@@ -1255,7 +1255,7 @@ function subClash(cfg, url) {
     yaml =
       '# cf-fusion 完整分流规则 (Loyalsoldier 规则集, 客户端直连获取)\n'
       + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
-      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - 223.5.5.5\n    - 8.8.8.8\n'
+      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n'
       + 'proxies:\n' + proxies.join('\n') + '\n'
       + fullGroups + '\n'
       + fullProviders + '\n'
@@ -1264,7 +1264,7 @@ function subClash(cfg, url) {
     yaml =
       '# cf-fusion 极简订阅 (本地生成, 无第三方转换)\n'
       + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
-      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - 223.5.5.5\n    - 8.8.8.8\n'
+      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n'
       + 'proxies:\n' + proxies.join('\n') + '\n'
       + 'proxy-groups:\n'
       + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']\n'
@@ -1406,7 +1406,7 @@ function subSingbox(cfg, url) {
 
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'local', type: 'udp', server: '223.5.5.5' }] },
+      dns: { servers: [{ tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query' }] },
       outbounds: fullOutbounds,
       route: {
         default_http_client: 'http-direct',
@@ -1429,7 +1429,7 @@ function subSingbox(cfg, url) {
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'local', type: 'udp', server: '223.5.5.5' }] },
+      dns: { servers: [{ tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query' }] },
       outbounds,
       route: {
         default_http_client: 'http-direct',
@@ -1714,8 +1714,6 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs) {
   }
   if (!sess) { ws.close(1008, 'bad request'); return; }
   reader.consume(sess.headerLen);
-  console.log(`[VLESS] header parsed, headerLen=${sess.headerLen}, target=${sess.host}:${sess.port}`);
-
   let dial;
   try {
     dial = await dialOut(cfg, overrides, sess.host, sess.port);
@@ -1737,10 +1735,7 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs) {
   const writer = sock.writable.getWriter();
   ws.addEventListener('close', () => { try { writer.releaseLock(); } catch {} });
   // 切换为直通模式: 已缓冲的(去掉协议头后)数据先发, 后续消息实时转发
-  reader.setForward(async (d) => {
-    console.log(`[VLESS] forwarding ${d.length} bytes to target`);
-    await writer.write(d);
-  });
+  reader.setForward(async (d) => { await writer.write(d); });
   await pumpSocketToWS(sock, ws, [sess.responsePrefix, dial.leftover]);
 }
 
