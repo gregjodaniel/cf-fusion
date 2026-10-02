@@ -434,6 +434,8 @@ export default {
 
     // 3) 订阅 / 分享页
     if (segs.length && validSubPath(segs[0], cfg)) {
+      // 订阅路径严格匹配：多余路径段直接 404，避免拼错地址却返回错误格式的内容
+      if (segs.length > 2) return new Response('Not Found', { status: 404 });
       const sub = (segs[1] || '').toLowerCase();
       const target = (url.searchParams.get('target') || '').toLowerCase();
       if (sub === 'vg' || sub === 'jk' || target === 'vg' || target === 'jk') {
