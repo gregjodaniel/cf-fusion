@@ -71,6 +71,7 @@ Cloudflare Pages → 上传资产 → 把 `_worker.js`（文件名保持 `_worke
 - `https://域名/KEY/singbox` — Sing-box 订阅（极简规则）
 - `https://域名/KEY/singbox?rules=full` — Sing-box 完整分流（内置 MetaCubeX 二进制 SRS 规则集）
 - `https://域名/KEY/v2ray` — Base64 订阅
+- `https://域名/KEY/vg` — 家宽链式代理订阅（实验性，基于 VPN Gate + dialer-proxy，需后台开启）
 - `https://域名/admin` — 管理后台
 
 > **关于双模规则与隐私安全**：
@@ -98,6 +99,36 @@ path: /KEY?http=user:pass@1.2.3.4:8080
 ```
 
 SS 节点：WS 路径用 `/KEY/ss`，密码为 UUID（简化版无 AEAD，仅个人使用；通用 Clash 订阅不含 SS）。
+
+## 实验性功能：家宽链式代理（VPN Gate + dialer-proxy）
+
+cf-fusion 实验性支持通过客户端前置代理链式连接全球家庭宽带节点，将流量伪装成普通家庭住宅 IP：
+
+```
+客户端 (Mihomo)
+   │
+   ▼ (VLESS + WS + TLS)
+Cloudflare 边缘机房 (cf-fusion 优选前置节点)
+   │
+   ▼ (TCP 透传 OpenVPN)
+全球家庭宽带志愿者节点 (VPN Gate Residential IP)
+   │
+   ▼
+目标网站 (识别为家庭宽带住宅出口)
+```
+
+1. **工作原理与极致压缩**：
+   - 客户端 mihomo 利用 `dialer-proxy: "⚡ CF前置"` 指向由 cf-fusion 生成的优选 VLESS 节点。
+   - Worker 自动拉取筑波大学 VPN Gate 镜像列表，智能过滤出支持 TCP 协议的纯净家庭宽带住宅节点（排除大学官方机房）。
+   - 提取 OpenVPN 配置并利用 YAML 锚点（`&vgca` 与 `*vgca`）对证书公钥进行去重复用，使庞大的链式订阅体积压缩达 90% 以上，秒级完成拉取与解析。
+2. **开启方法**：
+   - 本功能**默认严格关闭**，避免未授权访问及干扰默认订阅。
+   - 开启方式：在管理后台「运行配置」中勾选 **「启用家宽链式代理 (VPN Gate)」** 并保存（或设置环境变量 `ENABLE_VG=1`）。
+   - 开启后，在分享页及后台链接中即可获取专用订阅地址：`https://域名/KEY/vg`。
+3. **重要限制与安全提示**：
+   - **客户端限制**：必须且仅支持 **mihomo (Clash Meta) ≥ 1.19.25** 内核（如 Clash Verge Rev 最新版、Clash Nyanpasu、Mihomo Party 等）。Sing-box / v2rayNG / Shadowrocket 均不支持 OpenVPN 链式语法。
+   - **隐私与信任**：家庭宽带节点属于全球志愿者个人宽带，虽然他们无法解密你的 HTTPS/TLS 密文流量，但能够看到连接的目标域名与元数据。**严禁用于银行、涉密业务等敏感场景**。
+   - **稳定性预期**：志愿者节点受限于个人网络环境，掉线与失联属于正常现象。订阅内置了 `⚡ 家宽自动回退` 自动容灾组。
 
 ## 后台 API（需 `Authorization: Bearer <后台密码>`）
 

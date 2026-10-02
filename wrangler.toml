@@ -25,3 +25,4 @@ ADMIN_PASS = "admin"
 # P_TROJAN = "1"
 # P_SS = "0"
 # MAX_NODES = "24"                              # 订阅最多生成节点数
+# ENABLE_VG = "0"                               # 家宽链式代理开关: 1/0 (默认 0 关闭, 仅支持 mihomo)

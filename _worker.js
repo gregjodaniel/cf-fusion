@@ -337,6 +337,7 @@ async function getConfig(env) {
     preferredIps: Array.isArray(kvc.preferredIps) && kvc.preferredIps.length ? kvc.preferredIps : DEFAULT_PREFERRED_IPS.slice(),
     maxNodes: Math.min(Math.max(+kvc.maxNodes || +env.MAX_NODES || 24, 1), 200),
     logConn: kvc.logConn ?? envFlag(env.LOG_CONN, false),
+    enableVg: kvc.enableVg ?? envFlag(env.ENABLE_VG, false),
     coloMap,
     _trojanHash: '', // 懒加载
   };
@@ -417,6 +418,10 @@ export default {
     // 3) 订阅 / 分享页
     if (segs.length && validSubPath(segs[0], cfg)) {
       const sub = (segs[1] || '').toLowerCase();
+      const target = (url.searchParams.get('target') || '').toLowerCase();
+      if (sub === 'vg' || sub === 'jk' || target === 'vg' || target === 'jk') {
+        return handleHomeBroadbandSub(cfg, url);
+      }
       if (sub === 'sub') return subPlain(cfg, url);
       if (sub === 'clash') return subClash(cfg, url);
       if (sub === 'singbox' || sub === 'sing-box') return subSingbox(cfg, url);
@@ -473,7 +478,9 @@ function sharePageHTML(cfg, url) {
     + subRow(base + '/clash?rules=full', 'Clash 完整分流 (含 Loyalsoldier 规则集)')
     + subRow(base + '/singbox', 'Sing-box 订阅 (极简规则, 建议 1.12+ 内核)')
     + subRow(base + '/singbox?rules=full', 'Sing-box 完整分流 (含 MetaCubeX 规则集)')
+    + (cfg.enableVg ? subRow(base + '/vg', 'CLASH 家宽链式订阅 (仅 mihomo ≥ 1.19.25)') : '')
     + '<p class="tip">把订阅地址填入客户端的订阅管理即可, 每 15 分钟左右会自动更新优选。</p></div>'
+    + (cfg.enableVg ? '<div class="card" style="background:#fffbe6;border:1px solid #ffe58f"><h2>⚠️ 家宽链式代理须知</h2><p class="tip" style="color:#ad6800">1. 流量出口为全球志愿者共享家庭宽带，TLS 可保内容安全，但出口端可观测目标域名与 DNS。请勿用于敏感账户！<br>2. 仅支持 mihomo ≥ 1.19.25 (如 Clash Verge Rev、FlClash)；Sing-box、v2rayNG 等客户端不支持链式代理。<br>3. 节点掉线为正常现象，「🏠 家宽自动」策略组具备自动切换能力。</p></div>' : '')
     + '<div class="card"><h2>节点链接 (前 ' + nodes.length + ' 个)</h2>' + nodeRows + '</div>'
     + '<div class="card"><h2>客户端推荐</h2><div class="clients">'
     + 'Android: v2rayNG / NekoBox / Karing / ClashMeta<br>'
@@ -561,6 +568,7 @@ function adminPanelHTML() {
   + '<div class="chk"><input type="checkbox" id="c-pTrojan"><label for="c-pTrojan">启用 Trojan</label></div>'
   + '<div class="chk"><input type="checkbox" id="c-pSs"><label for="c-pSs">启用 Shadowsocks (简化版, 密码=UUID)</label></div>'
   + '<div class="chk"><input type="checkbox" id="c-logConn"><label for="c-logConn">记录连接日志 (存 KV, 最多 100 条)</label></div>'
+  + '<div class="chk"><input type="checkbox" id="c-enableVg"><label for="c-enableVg">启用家宽链式代理 (实验性: 仅支持 mihomo/Clash Meta 内核)</label></div>'
   + '<button class="btn" onclick="saveConfig()">保存</button>'
   + '<button class="btn ghost" onclick="loadConfig()">重新加载</button>'
   + '<button class="btn danger" onclick="resetConfig()">清空面板配置(回退到环境变量)</button></div>'
@@ -606,7 +614,9 @@ function adminPanelHTML() {
   + 'try{document.execCommand("copy")}catch(e){}document.body.removeChild(ta);done();}}'
   + 'function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}'
   + 'function loadLinks(){api("links").then(function(d){var h="";'
-  + 'var items=[["通用订阅",d.sub],["Clash 极简订阅",d.clash],["Clash 完整分流",d.clashFull],["Sing-box 极简订阅",d.singbox],["Sing-box 完整分流",d.singboxFull],["分享页",d.share]];'
+  + 'var items=[["通用订阅",d.sub],["Clash 极简订阅",d.clash],["Clash 完整分流",d.clashFull],["Sing-box 极简订阅",d.singbox],["Sing-box 完整分流",d.singboxFull]];'
+  + 'if(d.vg)items.push(["CLASH 家宽链式 (仅 mihomo)",d.vg]);'
+  + 'items.push(["分享页",d.share]);'
   + 'items.forEach(function(it){h+=\'<div class="linkrow"><code>\'+esc(it[1])+\'</code><button class="cp" onclick="cp2(this,\\\'\'+it[1]+\'\\\')">复制</button></div>\';});'
   + 'document.getElementById("links").innerHTML=h;}).catch(function(e){showMsg(e.message,false);});}'
   + 'function loadConfig(){api("config").then(function(c){'
@@ -616,6 +626,7 @@ function adminPanelHTML() {
   + 'document.getElementById("c-pTrojan").checked=!!c.pTrojan;'
   + 'document.getElementById("c-pSs").checked=!!c.pSs;'
   + 'document.getElementById("c-logConn").checked=!!c.logConn;'
+  + 'document.getElementById("c-enableVg").checked=!!c.enableVg;'
   + '}).catch(function(e){showMsg(e.message,false);});}'
   + 'function saveConfig(){var c={};'
   + '["uuid","adminPass","subKey","customPath","proxyip","outbound","outboundMode","fakeUrl","doh"].forEach(function(k){'
@@ -625,6 +636,7 @@ function adminPanelHTML() {
   + 'c.pTrojan=document.getElementById("c-pTrojan").checked;'
   + 'c.pSs=document.getElementById("c-pSs").checked;'
   + 'c.logConn=document.getElementById("c-logConn").checked;'
+  + 'c.enableVg=document.getElementById("c-enableVg").checked;'
   + 'api("ips").then(function(d){c.preferredIps=d.ips;'
   + 'return api("config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});})'
   + '.then(function(r){if(r.ok){showMsg("保存成功, 已立即生效",true);if(c.adminPass&&c.adminPass!==pw){pw=c.adminPass;sessionStorage.setItem("cfu_pw",pw);}}'
@@ -726,7 +738,7 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
   if (action === 'links' && request.method === 'GET') {
     const key = cfg.customPath || cfg.subKey;
     const base = 'https://' + url.host + '/' + key;
-    return json({
+    const res = {
       share: base,
       sub: base + '/sub',
       clash: base + '/clash',
@@ -734,7 +746,9 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
       singbox: base + '/singbox',
       singboxFull: base + '/singbox?rules=full',
       v2ray: base + '/v2ray'
-    });
+    };
+    if (cfg.enableVg) res.vg = base + '/vg';
+    return json(res);
   }
 
   // 延迟测试: 服务端对目标 TCP 建连计时 + 自动识别 Cloudflare Ingress 落地机房 (Colo/机场码)
@@ -1239,6 +1253,237 @@ function subSingbox(cfg, url) {
     };
   }
   return new Response(JSON.stringify(conf, null, 2), { headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+}
+
+/* ============================== 实验性功能: 家宽链式代理 (VPN Gate) ============================== */
+
+const VG_API_URL = 'https://www.vpngate.net/api/iphone/';
+const VG_CACHE_TTL_MS = 30 * 60 * 1000; // 30 分钟缓存
+let _vgCache = null;
+let _vgCacheAt = 0;
+
+function indentCert(text, indent) {
+  return text.split('\n').map(l => l.trim()).filter(Boolean).map(l => indent + l).join('\n');
+}
+
+function parseVgCsv(csvText) {
+  const candidates = [];
+  for (const rawLine of csvText.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('*') || line.startsWith('#')) continue;
+    const lastComma = line.lastIndexOf(',');
+    if (lastComma < 0) continue;
+    const b64 = line.slice(lastComma + 1).trim();
+    const cols = line.slice(0, lastComma).split(',');
+    if (cols.length < 7) continue;
+    // 过滤掉自营机房服务器
+    if ((cols[0] || '').startsWith('public-vpn')) continue;
+    if ((cols[1] || '').startsWith('219.100.37.')) continue;
+    if (!b64 || b64.length < 100) continue;
+    candidates.push({
+      country: (cols[6] || '').toUpperCase() || 'OTHER',
+      speed: parseInt(cols[4], 10) || 0,
+      b64,
+    });
+  }
+  candidates.sort((a, b) => b.speed - a.speed);
+
+  const nodes = [];
+  let certs = null;
+  for (const item of candidates) {
+    let conf = '';
+    try {
+      conf = atob(item.b64.replace(/\s/g, ''));
+    } catch { continue; }
+
+    if (!conf.includes('proto tcp')) continue;
+    const remoteM = conf.match(/remote\s+([0-9a-zA-Z\.\-]+)\s+(\d+)/);
+    if (!remoteM) continue;
+
+    if (!certs) {
+      const caM = conf.match(/<ca>([\s\S]*?)<\/ca>/);
+      const certM = conf.match(/<cert>([\s\S]*?)<\/cert>/);
+      const keyM = conf.match(/<key>([\s\S]*?)<\/key>/);
+      if (caM && certM && keyM) {
+        certs = { ca: caM[1].trim(), cert: certM[1].trim(), key: keyM[1].trim() };
+      }
+      if (!certs) continue;
+    }
+
+    const cipherM = conf.match(/cipher\s+([A-Za-z0-9\-]+)/);
+    const authM = conf.match(/auth\s+([A-Za-z0-9\-]+)/);
+    nodes.push({
+      country: item.country,
+      host: remoteM[1],
+      port: parseInt(remoteM[2], 10) || 443,
+      cipher: cipherM ? cipherM[1] : 'AES-128-CBC',
+      auth: authM ? authM[1] : 'SHA1',
+    });
+    if (nodes.length >= 60) break; // 最多保留 60 个优质住宅宽带节点
+  }
+  return { nodes, certs };
+}
+
+async function fetchVgNodes() {
+  const now = Date.now();
+  if (_vgCache && now - _vgCacheAt < VG_CACHE_TTL_MS) return _vgCache;
+
+  let text = '';
+  let lastErr = null;
+  for (const u of [VG_API_URL, VG_API_URL.replace(/^https:/, 'http:')]) {
+    try {
+      const res = await fetch(u, {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/plain' },
+        cf: { cacheTtl: 1800, cacheEverything: true },
+      });
+      if (res.ok) {
+        text = await res.text();
+        break;
+      }
+      lastErr = new Error('HTTP ' + res.status);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (!text) throw (lastErr || new Error('无法连接 VPN Gate 节点源'));
+  const parsed = parseVgCsv(text);
+  if (!parsed.nodes.length || !parsed.certs) throw new Error('未解析出可用 TCP 家宽节点');
+  _vgCache = parsed;
+  _vgCacheAt = now;
+  return parsed;
+}
+
+async function handleHomeBroadbandSub(cfg, url) {
+  if (!cfg.enableVg) {
+    return new Response(
+      '【cf-fusion】家宽链式代理功能未开启。\n\n如需使用，请前往管理后台 (/admin) 在「节点配置」中开启「启用家宽链式代理 (实验性)」并保存。',
+      { status: 403, headers: { 'Content-Type': 'text/plain;charset=utf-8' } }
+    );
+  }
+
+  const host = url.host;
+  const cfNodes = buildNodes(cfg, host);
+  const tlsNodes = cfNodes.filter(n => n.tls);
+  const frontNodes = tlsNodes.length ? tlsNodes : cfNodes;
+  const frontGroup = '⚡ CF前置';
+  const autoGroup = '🏠 家宽自动';
+  const selectGroup = '🏠 家宽节点';
+  const mainGroup = '🚀 节点选择';
+
+  let vgData;
+  try {
+    vgData = await fetchVgNodes();
+  } catch (e) {
+    return new Response(
+      `家宽节点列表拉取失败：${e.message}\n请稍后重试，客户端将保留现有缓存。`,
+      { status: 503, headers: { 'Content-Type': 'text/plain;charset=utf-8' } }
+    );
+  }
+
+  const countryCounts = {};
+  const vgItems = vgData.nodes.map(n => {
+    countryCounts[n.country] = (countryCounts[n.country] || 0) + 1;
+    const seq = String(countryCounts[n.country]).padStart(2, '0');
+    return {
+      ...n,
+      name: `🏠 ${n.country}-家宽-${seq}`,
+    };
+  });
+
+  const frontProxies = [];
+  const frontNames = [];
+  for (const n of frontNodes) {
+    const fn = n.name + '-vless';
+    frontNames.push(fn);
+    frontProxies.push(
+      '  - name: ' + q(fn) + '\n    type: vless\n    server: ' + n.ip + '\n    port: ' + n.port
+      + '\n    uuid: ' + cfg.uuid + '\n    tls: ' + (n.tls ? 'true' : 'false')
+      + '\n    servername: ' + host + '\n    client-fingerprint: chrome\n    network: ws'
+      + '\n    ws-opts:\n      path: /' + (cfg.customPath || cfg.subKey) + '\n      headers:\n        Host: ' + host
+    );
+  }
+
+  const vgProxies = [];
+  vgItems.forEach((n, idx) => {
+    const lines = [
+      `  - name: ${q(n.name)}`,
+      '    type: openvpn',
+      `    server: ${n.host}`,
+      `    port: ${n.port}`,
+      '    proto: tcp',
+      '    username: vpn',
+      '    password: vpn',
+      `    cipher: ${n.cipher}`,
+      `    auth: ${n.auth}`,
+      '    udp: false',
+      '    handshake-timeout: 30',
+      '    remote-dns-resolve: true',
+      '    dns: [ 8.8.8.8, 1.1.1.1 ]',
+      `    dialer-proxy: ${q(frontGroup)}`,
+    ];
+    if (idx === 0) {
+      lines.push('    ca: &vgca |-\n' + indentCert(vgData.certs.ca, '      '));
+      lines.push('    cert: &vgcert |-\n' + indentCert(vgData.certs.cert, '      '));
+      lines.push('    key: &vgkey |-\n' + indentCert(vgData.certs.key, '      '));
+    } else {
+      lines.push('    ca: *vgca', '    cert: *vgcert', '    key: *vgkey');
+    }
+    vgProxies.push(lines.join('\n'));
+  });
+
+  const speedSortedNames = vgItems.map(i => q(i.name)).join(', ');
+  const countrySortedNames = vgItems.slice()
+    .sort((a, b) => a.country.localeCompare(b.country))
+    .map(i => q(i.name)).join(', ');
+
+  const yaml = [
+    '# ============================================================================== #',
+    '# cf-fusion 实验性家宽链式订阅 (VPN Gate Residential Broadband via dialer-proxy)  #',
+    '#                                                                                #',
+    '# ⚠️ 免责与安全声明:                                                            #',
+    '# 1. 流量出口为全球志愿者共享家庭宽带，TLS 内容安全，但出口端可看到目标域名与 DNS  #',
+    '# 2. 节点由志愿者维护，掉线属于正常现象；「🏠 家宽自动」策略组具备自动故障转移   #',
+    '# 3. 客户端限制：本配置仅适用于 mihomo ≥ 1.19.25 (Clash Verge Rev / FlClash 等)  #',
+    '# ============================================================================== #',
+    'mixed-port: 7890',
+    'allow-lan: false',
+    'mode: rule',
+    'log-level: info',
+    'unified-delay: true',
+    'tcp-concurrent: true',
+    'dns:',
+    '  enable: true',
+    '  ipv6: false',
+    '  enhanced-mode: fake-ip',
+    '  fake-ip-range: 198.18.0.1/16',
+    '  nameserver:',
+    '    - 223.5.5.5',
+    '    - 1.1.1.1',
+    '',
+    'proxies:',
+    ...frontProxies,
+    ...vgProxies,
+    '',
+    'proxy-groups:',
+    '  - name: ' + q(frontGroup) + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + frontNames.map(q).join(', ') + ']',
+    '  - name: ' + q(autoGroup) + '\n    type: fallback\n    url: http://www.gstatic.com/generate_204\n    interval: 1800\n    lazy: true\n    proxies: [' + speedSortedNames + ']',
+    '  - name: ' + q(selectGroup) + '\n    type: select\n    proxies: [' + countrySortedNames + ']',
+    '  - name: ' + q(mainGroup) + '\n    type: select\n    proxies: [' + q(autoGroup) + ', ' + q(selectGroup) + ', ' + q(frontGroup) + ', DIRECT]',
+    '',
+    'rules:',
+    '  - DOMAIN-SUFFIX,local,DIRECT',
+    '  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
+    '  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve',
+    '  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
+    '  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
+    '  - GEOIP,CN,DIRECT',
+    '  - MATCH,' + q(mainGroup),
+    ''
+  ].join('\n');
+
+  return new Response(yaml, {
+    headers: { 'Content-Type': 'text/yaml;charset=utf-8', 'Cache-Control': 'no-store' }
+  });
 }
 
 /* ============================== WebSocket 代理核心 ============================== */
