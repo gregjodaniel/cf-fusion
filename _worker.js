@@ -1105,7 +1105,7 @@ function subClash(cfg, url) {
       + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']\n'
       + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']\n'
       + (regionGroupBlocks.length ? regionGroupBlocks.join('\n') + '\n' : '')
-      + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT, ' + q('🚀 节点选择') + ']\n'
+      + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]\n'
       + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
       + 'rules:\n'
       + '  - DOMAIN-SUFFIX,local,🎯 全球直连\n'
