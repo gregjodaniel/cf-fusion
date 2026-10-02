@@ -66,10 +66,15 @@ Cloudflare Pages → 上传资产 → 把 `_worker.js`（文件名保持 `_worke
 
 - `https://域名/KEY` — 分享页（订阅地址 + 节点链接 + 客户端推荐）
 - `https://域名/KEY/sub` — 通用订阅（v2rayNG / NekoBox / Shadowrocket 直接用）
-- `https://域名/KEY/clash` — Clash 订阅
-- `https://域名/KEY/singbox` — Sing-box 订阅
+- `https://域名/KEY/clash` — Clash 订阅（极简规则，轻量极速）
+- `https://域名/KEY/clash?rules=full` — Clash 完整分流（内置 Loyalsoldier 规则集，细分 OpenAI/流媒体/电报/谷歌等分组）
+- `https://域名/KEY/singbox` — Sing-box 订阅（极简规则）
+- `https://域名/KEY/singbox?rules=full` — Sing-box 完整分流（内置 MetaCubeX 二进制 SRS 规则集）
 - `https://域名/KEY/v2ray` — Base64 订阅
 - `https://域名/admin` — 管理后台
+
+> **关于双模规则与隐私安全**：
+> 默认模式保持极简轻量，秒级响应。`?rules=full` 完整分流模式严格遵循**本地零泄漏**原则——所有 rule-provider 和 rule-set 链接直接由客户端本地向 jsDelivr/GitHub CDN 拉取，Worker 纯本地模板渲染，你的节点与连接凭据绝不经过任何第三方订阅转换后端。
 
 单连接覆盖示例（只影响该节点）：
 
@@ -87,7 +92,7 @@ SS 节点：WS 路径用 `/KEY/ss`，密码为 UUID（简化版无 AEAD，仅个
 - `POST /admin/api/auth` — 校验密码
 - `GET/POST/DELETE /admin/api/config` — 读 / 写 / 清空配置
 - `GET/POST /admin/api/ips` — 读 / 写优选 IP（`{"reset":true}` 恢复默认）
-- `GET /admin/api/links` — 订阅地址
+- `GET /admin/api/links` — 订阅地址（含极简与完整分流链接）
 - `POST /admin/api/latency` `{"hosts":["1.1.1.1:443"]}` — 延迟测试
 - `GET /admin/api/logs` — 连接日志（需先在配置里打开）
 
@@ -98,6 +103,8 @@ SS 节点：WS 路径用 `/KEY/ss`，密码为 UUID（简化版无 AEAD，仅个
 - iOS：Shadowrocket / Stash / Surge / Karing
 - macOS：Clash Verge Rev / Surge / Stash
 - 软路由：passwall / ssr-plus / homeproxy
+
+> **内核版本建议**：Sing-box 建议使用 **1.12+** 内核。cf-fusion 的 Sing-box 配置已严格兼容 1.14+ 移除旧版纯字符串 DNS 的规范。
 
 ## 说明与限制
 

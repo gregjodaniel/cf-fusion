@@ -343,8 +343,10 @@ function sharePageHTML(cfg, url) {
     + '.tip{color:#888;font-size:13px}.clients{line-height:2}</style></head><body><div class="wrap">'
     + '<div class="card"><h2>订阅地址</h2>'
     + subRow(base + '/sub', '通用订阅 (v2rayNG / NekoBox / Shadowrocket)') 
-    + subRow(base + '/clash', 'Clash 订阅')
-    + subRow(base + '/singbox', 'Sing-box 订阅')
+    + subRow(base + '/clash', 'Clash 订阅 (极简规则)')
+    + subRow(base + '/clash?rules=full', 'Clash 完整分流 (含 Loyalsoldier 规则集)')
+    + subRow(base + '/singbox', 'Sing-box 订阅 (极简规则, 建议 1.12+ 内核)')
+    + subRow(base + '/singbox?rules=full', 'Sing-box 完整分流 (含 MetaCubeX 规则集)')
     + '<p class="tip">把订阅地址填入客户端的订阅管理即可, 每 15 分钟左右会自动更新优选。</p></div>'
     + '<div class="card"><h2>节点链接 (前 ' + nodes.length + ' 个)</h2>' + nodeRows + '</div>'
     + '<div class="card"><h2>客户端推荐</h2><div class="clients">'
@@ -477,7 +479,7 @@ function adminPanelHTML() {
   + 'try{document.execCommand("copy")}catch(e){}document.body.removeChild(ta);done();}}'
   + 'function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}'
   + 'function loadLinks(){api("links").then(function(d){var h="";'
-  + 'var items=[["通用订阅",d.sub],["Clash 订阅",d.clash],["Sing-box 订阅",d.singbox],["分享页",d.share]];'
+  + 'var items=[["通用订阅",d.sub],["Clash 极简订阅",d.clash],["Clash 完整分流",d.clashFull],["Sing-box 极简订阅",d.singbox],["Sing-box 完整分流",d.singboxFull],["分享页",d.share]];'
   + 'items.forEach(function(it){h+=\'<div class="linkrow"><code>\'+esc(it[1])+\'</code><button class="cp" onclick="cp2(this,\\\'\'+it[1]+\'\\\')">复制</button></div>\';});'
   + 'document.getElementById("links").innerHTML=h;}).catch(function(e){showMsg(e.message,false);});}'
   + 'function loadConfig(){api("config").then(function(c){'
@@ -594,7 +596,15 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
   if (action === 'links' && request.method === 'GET') {
     const key = cfg.customPath || cfg.subKey;
     const base = 'https://' + url.host + '/' + key;
-    return json({ share: base, sub: base + '/sub', clash: base + '/clash', singbox: base + '/singbox', v2ray: base + '/v2ray' });
+    return json({
+      share: base,
+      sub: base + '/sub',
+      clash: base + '/clash',
+      clashFull: base + '/clash?rules=full',
+      singbox: base + '/singbox',
+      singboxFull: base + '/singbox?rules=full',
+      v2ray: base + '/v2ray'
+    });
   }
 
   // 延迟测试: 服务端对目标 TCP 建连计时 (cfnew 内置测速的服务端版)
@@ -710,6 +720,7 @@ function subClash(cfg, url) {
   const host = url.host;
   const key = cfg.customPath || cfg.subKey;
   const nodes = buildNodes(cfg, host);
+  const isFull = url.searchParams.get('rules') === 'full' || url.searchParams.get('full') === '1';
   const proxies = [];
   for (const n of nodes) {
     const nm = n.name;
@@ -726,31 +737,133 @@ function subClash(cfg, url) {
         + '\n    ws-opts:\n      path: /' + key + '\n      headers:\n        Host: ' + host);
     }
   }
-  // 注意: 本脚本的简化版 SS 走私有 WS 封装, 通用 Clash 客户端不支持, 故不生成
   const allNames = [];
   for (const n of nodes) {
     if (cfg.pVless) allNames.push(n.name + '-vless');
     if (cfg.pTrojan) allNames.push(n.name + '-trojan');
   }
-  const nameList = allNames.map(q).join(', ');
-  const yaml =
-    '# cf-fusion 自动生成 (本地生成, 无第三方转换)\n'
-    + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
-    + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - 223.5.5.5\n    - 8.8.8.8\n'
-    + 'proxies:\n' + proxies.join('\n') + '\n'
-    + 'proxy-groups:\n'
-    + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + q('♻️ 自动选择') + ', ' + q('🎯 全球直连') + ', ' + nameList + ']\n'
-    + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']\n'
-    + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT, ' + q('🚀 节点选择') + ']\n'
-    + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
-    + 'rules:\n'
-    + '  - DOMAIN-SUFFIX,local,' + q('🎯 全球直连') + '\n'
-    + '  - IP-CIDR,192.168.0.0/16,' + q('🎯 全球直连') + ',no-resolve\n'
-    + '  - IP-CIDR,10.0.0.0/8,' + q('🎯 全球直连') + ',no-resolve\n'
-    + '  - IP-CIDR,172.16.0.0/12,' + q('🎯 全球直连') + ',no-resolve\n'
-    + '  - IP-CIDR,127.0.0.0/8,' + q('🎯 全球直连') + ',no-resolve\n'
-    + '  - GEOIP,CN,' + q('🎯 全球直连') + '\n'
-    + '  - MATCH,' + q('🚀 节点选择') + '\n';
+  const nameList = allNames.length ? allNames.map(q).join(', ') : 'DIRECT';
+
+  let yaml = '';
+  if (isFull) {
+    const loyalsoldierBase = 'https://fastly.jsdelivr.net/gh/Loyalsoldier/clash-rules@release';
+    const provider = (name, type) =>
+      `  ${name}:\n    type: http\n    behavior: ${type}\n    url: "${loyalsoldierBase}/${name}.txt"\n    path: ./rulesets/loyalsoldier/${name}.txt\n    interval: 86400`;
+
+    const fullProviders = [
+      'rule-providers:',
+      provider('reject', 'domain'),
+      provider('icloud', 'domain'),
+      provider('apple', 'domain'),
+      provider('google', 'domain'),
+      provider('proxy', 'domain'),
+      provider('direct', 'domain'),
+      provider('private', 'domain'),
+      provider('gfw', 'domain'),
+      provider('greatfire', 'domain'),
+      provider('tld-not-cn', 'domain'),
+      provider('telegramcidr', 'ipcidr'),
+      provider('cncidr', 'ipcidr'),
+      provider('lancidr', 'ipcidr'),
+      provider('applications', 'classical')
+    ].join('\n');
+
+    const fullGroups = [
+      'proxy-groups:',
+      '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']',
+      '  - name: ' + q('🌍 国外媒体') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('📺 哔哩哔哩') + '\n    type: select\n    proxies: [' + q('🎯 全球直连') + ', ' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ']',
+      '  - name: ' + q('📹 油管视频') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('🌍 国外媒体') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('🎬 奈飞视频') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('🌍 国外媒体') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('📲 电报信息') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('🌐 谷歌服务') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('🤖 OpenAI') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']',
+      '  - name: ' + q('Ⓜ️ 微软服务') + '\n    type: select\n    proxies: [' + q('🎯 全球直连') + ', ' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ']',
+      '  - name: ' + q('🍎 苹果服务') + '\n    type: select\n    proxies: [' + q('🎯 全球直连') + ', ' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ']',
+      '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]',
+      '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]',
+      '  - name: ' + q('🐟 漏网之鱼') + '\n    type: select\n    proxies: [' + q('🚀 节点选择') + ', ' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']'
+    ].join('\n');
+
+    const fullRules = [
+      'rules:',
+      '  - DOMAIN-SUFFIX,local,' + q('🎯 全球直连'),
+      '  - DOMAIN-SUFFIX,googleapis.cn,' + q('🌐 谷歌服务'),
+      '  - DOMAIN-SUFFIX,gstatic.com,' + q('🌐 谷歌服务'),
+      '  - DOMAIN-SUFFIX,googlevideo.com,' + q('📹 油管视频'),
+      '  - DOMAIN-SUFFIX,googleusercontent.com,' + q('🌐 谷歌服务'),
+      '  - DOMAIN-KEYWORD,youtube,' + q('📹 油管视频'),
+      '  - DOMAIN-SUFFIX,youtube.com,' + q('📹 油管视频'),
+      '  - DOMAIN-SUFFIX,youtu.be,' + q('📹 油管视频'),
+      '  - DOMAIN-KEYWORD,netflix,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,nflxext.com,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,nflxso.net,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,nflxvideo.net,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,nflximg.com,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,nflximg.net,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,netflix.com,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,netflix.net,' + q('🎬 奈飞视频'),
+      '  - DOMAIN-SUFFIX,bilibili.com,' + q('📺 哔哩哔哩'),
+      '  - DOMAIN-SUFFIX,bilivideo.com,' + q('📺 哔哩哔哩'),
+      '  - DOMAIN-SUFFIX,hdslb.com,' + q('📺 哔哩哔哩'),
+      '  - DOMAIN-KEYWORD,openai,' + q('🤖 OpenAI'),
+      '  - DOMAIN-KEYWORD,chatgpt,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,openai.com,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,chatgpt.com,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,oaistatic.com,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,oaiusercontent.com,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,anthropic.com,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,claude.ai,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,perplexity.ai,' + q('🤖 OpenAI'),
+      '  - DOMAIN-SUFFIX,gemini.google.com,' + q('🤖 OpenAI'),
+      '  - RULE-SET,applications,' + q('🎯 全球直连'),
+      '  - RULE-SET,private,' + q('🎯 全球直连'),
+      '  - RULE-SET,reject,' + q('🛑 全球拦截'),
+      '  - RULE-SET,icloud,' + q('🍎 苹果服务'),
+      '  - RULE-SET,apple,' + q('🍎 苹果服务'),
+      '  - RULE-SET,google,' + q('🌐 谷歌服务'),
+      '  - RULE-SET,proxy,' + q('🚀 节点选择'),
+      '  - RULE-SET,gfw,' + q('🚀 节点选择'),
+      '  - RULE-SET,greatfire,' + q('🚀 节点选择'),
+      '  - RULE-SET,tld-not-cn,' + q('🚀 节点选择'),
+      '  - RULE-SET,direct,' + q('🎯 全球直连'),
+      '  - RULE-SET,lancidr,' + q('🎯 全球直连') + ',no-resolve',
+      '  - RULE-SET,cncidr,' + q('🎯 全球直连') + ',no-resolve',
+      '  - RULE-SET,telegramcidr,' + q('📲 电报信息') + ',no-resolve',
+      '  - GEOIP,LAN,' + q('🎯 全球直连') + ',no-resolve',
+      '  - GEOIP,CN,' + q('🎯 全球直连') + ',no-resolve',
+      '  - MATCH,' + q('🐟 漏网之鱼')
+    ].join('\n');
+
+    yaml =
+      '# cf-fusion 完整分流规则 (Loyalsoldier 规则集, 客户端直连获取)\n'
+      + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
+      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - 223.5.5.5\n    - 8.8.8.8\n'
+      + 'proxies:\n' + proxies.join('\n') + '\n'
+      + fullGroups + '\n'
+      + fullProviders + '\n'
+      + fullRules + '\n';
+  } else {
+    yaml =
+      '# cf-fusion 极简订阅 (本地生成, 无第三方转换)\n'
+      + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
+      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - 223.5.5.5\n    - 8.8.8.8\n'
+      + 'proxies:\n' + proxies.join('\n') + '\n'
+      + 'proxy-groups:\n'
+      + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + q('♻️ 自动选择') + ', ' + nameList + ', ' + q('🎯 全球直连') + ']\n'
+      + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']\n'
+      + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT, ' + q('🚀 节点选择') + ']\n'
+      + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
+      + 'rules:\n'
+      + '  - DOMAIN-SUFFIX,local,' + q('🎯 全球直连') + '\n'
+      + '  - IP-CIDR,192.168.0.0/16,' + q('🎯 全球直连') + ',no-resolve\n'
+      + '  - IP-CIDR,10.0.0.0/8,' + q('🎯 全球直连') + ',no-resolve\n'
+      + '  - IP-CIDR,172.16.0.0/12,' + q('🎯 全球直连') + ',no-resolve\n'
+      + '  - IP-CIDR,127.0.0.0/8,' + q('🎯 全球直连') + ',no-resolve\n'
+      + '  - GEOIP,CN,' + q('🎯 全球直连') + '\n'
+      + '  - MATCH,' + q('🚀 节点选择') + '\n';
+  }
   return new Response(yaml, { headers: { 'Content-Type': 'text/yaml;charset=utf-8' } });
 }
 
@@ -758,6 +871,7 @@ function subSingbox(cfg, url) {
   const host = url.host;
   const key = cfg.customPath || cfg.subKey;
   const nodes = buildNodes(cfg, host);
+  const isFull = url.searchParams.get('rules') === 'full' || url.searchParams.get('full') === '1';
   const outbounds = [];
   const tags = [];
   for (const n of nodes) {
@@ -780,24 +894,99 @@ function subSingbox(cfg, url) {
       });
     }
   }
-  outbounds.push(
-    { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...tags, 'direct'] },
-    { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
-    { type: 'direct', tag: 'direct' },
-    { type: 'block', tag: 'block' },
-  );
-  const conf = {
-    log: { level: 'info' },
-    dns: { servers: [{ tag: 'local', address: '223.5.5.5', detour: 'direct' }] },
-    outbounds,
-    route: {
-      rules: [
-        { geosite: 'cn', geoip: ['cn', 'private'], outbound: 'direct' },
-      ],
-      final: '🚀 节点选择',
-      auto_detect_interface: true,
-    },
-  };
+
+  let conf;
+  if (isFull) {
+    const srsSite = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite';
+    const srsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
+    const sRule = name => ({ tag: `geosite-${name}`, type: 'remote', format: 'binary', url: `${srsSite}/${name}.srs`, download_detour: 'direct' });
+    const iRule = name => ({ tag: `geoip-${name}`, type: 'remote', format: 'binary', url: `${srsIp}/${name}.srs`, download_detour: 'direct' });
+
+    const ruleSets = [
+      sRule('cn'), sRule('private'), sRule('apple'), sRule('apple-cn'), sRule('microsoft'), sRule('microsoft@cn'),
+      sRule('google'), sRule('telegram'), sRule('openai'), sRule('anthropic'), sRule('youtube'), sRule('netflix'),
+      sRule('disney'), sRule('spotify'), sRule('tiktok'), sRule('twitter'), sRule('facebook'), sRule('github'),
+      sRule('geolocation-!cn'), sRule('category-ads-all'), iRule('cn'), iRule('private'), iRule('telegram')
+    ];
+
+    const fullOutbounds = [
+      { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...tags, 'direct'], default: '♻️ 自动选择' },
+      { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
+      { type: 'selector', tag: '🌍 国外媒体', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '📲 电报信息', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🌐 谷歌服务', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🤖 OpenAI', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: 'Ⓜ️ 微软服务', outbounds: ['direct', '🚀 节点选择', '♻️ 自动选择', ...tags] },
+      { type: 'selector', tag: '🍎 苹果服务', outbounds: ['direct', '🚀 节点选择', '♻️ 自动选择', ...tags] },
+      { type: 'selector', tag: '📺 哔哩哔哩', outbounds: ['direct', '🚀 节点选择', '♻️ 自动选择', ...tags] },
+      { type: 'selector', tag: '📹 油管视频', outbounds: ['🚀 节点选择', '🌍 国外媒体', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🎬 奈飞视频', outbounds: ['🚀 节点选择', '🌍 国外媒体', '♻️ 自动选择', 'direct', ...tags] },
+      { type: 'selector', tag: '🎯 全球直连', outbounds: ['direct'] },
+      { type: 'selector', tag: '🐟 漏网之鱼', outbounds: ['🚀 节点选择', '♻️ 自动选择', 'direct', ...tags] },
+      ...outbounds,
+      { type: 'direct', tag: 'direct' },
+      { type: 'block', tag: 'block' },
+    ];
+
+    const fullRouteRules = [
+      { action: 'sniff' },
+      { protocol: 'dns', action: 'hijack-dns' },
+      { ip_is_private: true, outbound: 'direct' },
+      { rule_set: 'geosite-category-ads-all', action: 'reject' },
+      { rule_set: 'geosite-private', outbound: 'direct' },
+      { rule_set: 'geosite-apple-cn', outbound: 'direct' },
+      { rule_set: 'geosite-microsoft@cn', outbound: 'direct' },
+      { rule_set: 'geosite-apple', outbound: '🍎 苹果服务' },
+      { rule_set: 'geosite-microsoft', outbound: 'Ⓜ️ 微软服务' },
+      { rule_set: 'geosite-openai', outbound: '🤖 OpenAI' },
+      { rule_set: 'geosite-anthropic', outbound: '🤖 OpenAI' },
+      { rule_set: 'geosite-telegram', outbound: '📲 电报信息' },
+      { rule_set: 'geoip-telegram', outbound: '📲 电报信息' },
+      { rule_set: 'geosite-google', outbound: '🌐 谷歌服务' },
+      { rule_set: 'geosite-youtube', outbound: '🌍 国外媒体' },
+      { rule_set: 'geosite-netflix', outbound: '🌍 国外媒体' },
+      { rule_set: 'geosite-disney', outbound: '🌍 国外媒体' },
+      { rule_set: 'geosite-spotify', outbound: '🌍 国外媒体' },
+      { rule_set: 'geosite-tiktok', outbound: '🌍 国外媒体' },
+      { rule_set: 'geosite-twitter', outbound: '🌍 国外媒体' },
+      { rule_set: 'geosite-facebook', outbound: '🌍 国外媒体' },
+      { rule_set: 'geosite-github', outbound: '🚀 节点选择' },
+      { rule_set: 'geosite-geolocation-!cn', outbound: '🚀 节点选择' },
+      { rule_set: 'geosite-cn', outbound: 'direct' },
+      { rule_set: 'geoip-cn', outbound: 'direct' },
+    ];
+
+    conf = {
+      log: { level: 'info' },
+      dns: { servers: [{ tag: 'local', address: '223.5.5.5', detour: 'direct' }] },
+      outbounds: fullOutbounds,
+      route: {
+        rule_set: ruleSets,
+        rules: fullRouteRules,
+        final: '🐟 漏网之鱼',
+        auto_detect_interface: true,
+      },
+    };
+  } else {
+    outbounds.push(
+      { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...tags, 'direct'] },
+      { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
+      { type: 'direct', tag: 'direct' },
+      { type: 'block', tag: 'block' },
+    );
+    conf = {
+      log: { level: 'info' },
+      dns: { servers: [{ tag: 'local', address: '223.5.5.5', detour: 'direct' }] },
+      outbounds,
+      route: {
+        rules: [
+          { geosite: 'cn', geoip: ['cn', 'private'], outbound: 'direct' },
+        ],
+        final: '🚀 节点选择',
+        auto_detect_interface: true,
+      },
+    };
+  }
   return new Response(JSON.stringify(conf, null, 2), { headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 }
 
