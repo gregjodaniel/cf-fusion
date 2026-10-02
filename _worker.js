@@ -1175,8 +1175,8 @@ function subSingbox(cfg, url) {
   if (isFull) {
     const srsSite = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite';
     const srsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
-    const sRule = name => ({ tag: `geosite-${name}`, type: 'remote', format: 'binary', url: `${srsSite}/${name}.srs`, download_detour: 'direct' });
-    const iRule = name => ({ tag: `geoip-${name}`, type: 'remote', format: 'binary', url: `${srsIp}/${name}.srs`, download_detour: 'direct' });
+    const sRule = name => ({ tag: `geosite-${name}`, type: 'remote', format: 'binary', url: `${srsSite}/${name}.srs` });
+    const iRule = name => ({ tag: `geoip-${name}`, type: 'remote', format: 'binary', url: `${srsIp}/${name}.srs` });
 
     const ruleSets = [
       sRule('cn'), sRule('private'), sRule('apple'), sRule('apple-cn'), sRule('microsoft'), sRule('microsoft@cn'),
@@ -1239,14 +1239,16 @@ function subSingbox(cfg, url) {
 
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'local', address: '223.5.5.5', detour: 'direct' }] },
+      dns: { servers: [{ tag: 'local', type: 'udp', server: '223.5.5.5' }] },
       outbounds: fullOutbounds,
       route: {
+        default_http_client: 'http-direct',
         rule_set: ruleSets,
         rules: fullRouteRules,
         final: '🐟 漏网之鱼',
         auto_detect_interface: true,
       },
+      http_clients: [{ tag: 'http-direct' }],
     };
   } else {
     outbounds.push(
@@ -1256,17 +1258,26 @@ function subSingbox(cfg, url) {
       { type: 'direct', tag: 'direct' },
       { type: 'block', tag: 'block' },
     );
+    const miniSrsSite = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite';
+    const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'local', address: '223.5.5.5', detour: 'direct' }] },
+      dns: { servers: [{ tag: 'local', type: 'udp', server: '223.5.5.5' }] },
       outbounds,
       route: {
+        default_http_client: 'http-direct',
+        rule_set: [
+          { tag: 'geosite-cn', type: 'remote', format: 'binary', url: `${miniSrsSite}/cn.srs` },
+          { tag: 'geoip-cn', type: 'remote', format: 'binary', url: `${miniSrsIp}/cn.srs` },
+          { tag: 'geoip-private', type: 'remote', format: 'binary', url: `${miniSrsIp}/private.srs` },
+        ],
         rules: [
-          { geosite: 'cn', geoip: ['cn', 'private'], outbound: 'direct' },
+          { rule_set: ['geosite-cn', 'geoip-cn', 'geoip-private'], outbound: 'direct' },
         ],
         final: '🚀 节点选择',
         auto_detect_interface: true,
       },
+      http_clients: [{ tag: 'http-direct' }],
     };
   }
   return new Response(JSON.stringify(conf, null, 2), { headers: { 'Content-Type': 'application/json;charset=utf-8' } });
