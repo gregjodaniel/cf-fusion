@@ -1793,8 +1793,17 @@ async function dialOut(cfg, overrides, host, port) {
     if (hp) { targetHost = hp.host; targetPort = hp.port; }
   }
   const direct = async () => {
-    const sock = await withTimeout(connect({ hostname: targetHost, port: targetPort }), DIAL_TIMEOUT_MS, 'dial timeout');
-    return { sock, leftover: new Uint8Array(0) };
+    try {
+      const sock = await withTimeout(connect({ hostname: targetHost, port: targetPort }), DIAL_TIMEOUT_MS, 'dial timeout');
+      return { sock, leftover: new Uint8Array(0) };
+    } catch (e) {
+      // ProxyIP 反代拨号失败时回退直连原始目标, 避免单个反代 IP 失效导致所有 HTTPS 中断
+      if (targetHost !== host || targetPort !== port) {
+        const sock = await withTimeout(connect({ hostname: host, port }), DIAL_TIMEOUT_MS, 'dial timeout');
+        return { sock, leftover: new Uint8Array(0) };
+      }
+      throw e;
+    }
   };
   const viaProxy = async () => {
     const p = parseProxyUrl(outboundStr);
