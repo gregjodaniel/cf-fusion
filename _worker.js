@@ -213,6 +213,68 @@ function parseHostPort(s, defaultPort) {
   if (m && !m[1].includes(':')) return { host: m[1], port: +m[2] };
   return { host: s, port: defaultPort };
 }
+/* ============================== ProxyIP 解析 (edgetunnel 做法) ============================== */
+// ProxyIP 是域名时, 按 TXT → A → AAAA 顺序解析出真实 IP 列表 (如 ProxyIP.US.CMLiussss.net 的 TXT 指向真实 proxy IP)
+// 带 5 分钟缓存, 避免每个连接都查 DNS
+const _proxyIPCache = new Map();
+async function _dohQuery(dohUrl, name, type) {
+  const typeCode = type === 'TXT' ? 16 : type === 'A' ? 1 : 28;
+  const resp = await fetch(`${dohUrl}?name=${encodeURIComponent(name)}&type=${type}`, {
+    headers: { 'accept': 'application/dns-json' },
+  });
+  if (!resp.ok) throw new Error(`DoH ${resp.status}`);
+  const data = await resp.json();
+  return (data.Answer || []).filter(a => a.type === typeCode).map(a => a.data);
+}
+function _isIPAddr(h) {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(h) || h.includes(':');
+}
+async function resolveProxyIPs(cfg, proxyip) {
+  const now = Date.now();
+  const cached = _proxyIPCache.get(proxyip);
+  if (cached && cached.expire > now) return cached.ips;
+  const dohUrl = cfg.doh || 'https://dns.google/dns-query';
+  const out = [];
+  for (const entry of proxyip.split(',').map(s => s.trim()).filter(Boolean)) {
+    const hp = parseHostPort(entry, 443);
+    if (!hp) continue;
+    let host = hp.host, port = hp.port;
+    const tpM = entry.match(/\.tp(\d+)/i);
+    if (tpM) port = parseInt(tpM[1], 10);
+    if (_isIPAddr(host)) { out.push([host, port]); continue; }
+    let done = false;
+    try {
+      const txts = await _dohQuery(dohUrl, host, 'TXT');
+      for (let txt of txts) {
+        if (txt.startsWith('"') && txt.endsWith('"')) txt = txt.slice(1, -1);
+        for (const part of txt.replace(/\\010/g, ',').split(',').map(s => s.trim()).filter(Boolean)) {
+          const php = parseHostPort(part, port);
+          if (!php) continue;
+          if (_isIPAddr(php.host)) { out.push([php.host, php.port]); done = true; }
+          else {
+            try {
+              for (const a of await _dohQuery(dohUrl, php.host, 'A')) { out.push([a, php.port]); done = true; }
+            } catch (e) { /* skip */ }
+          }
+        }
+      }
+      if (done) continue;
+    } catch (e) { /* fall through */ }
+    try {
+      const aRecs = await _dohQuery(dohUrl, host, 'A');
+      if (aRecs.length) { for (const a of aRecs) out.push([a, port]); continue; }
+    } catch (e) { /* fall through */ }
+    try {
+      const aaaaRecs = await _dohQuery(dohUrl, host, 'AAAA');
+      if (aaaaRecs.length) { for (const a of aaaaRecs) out.push([`[${a}]`, port]); continue; }
+    } catch (e) { /* fall through */ }
+    out.push([host, port]);
+  }
+  const ips = out.slice(0, 8);
+  _proxyIPCache.set(proxyip, { ips, expire: now + 5 * 60 * 1000 });
+  return ips;
+}
+
 function parseNodeItem(raw) {
   let str = String(raw || '').trim();
   let remark = '';
@@ -1786,41 +1848,41 @@ async function dialOut(cfg, overrides, host, port) {
   const outboundStr = (overrides.outbound || cfg.outbound || '').trim();
   const mode = cfg.outboundMode || 'proxy-first';
   const proxyip = (overrides.proxyip || cfg.proxyip || '').trim();
-  let targetHost = host, targetPort = port;
-  // ProxyIP: 目标是 TLS 端口时, 改拨反代 IP, 靠客户端 TLS 的 SNI 寻路 (三家通用做法)
-  if (proxyip && TLS_PORTS.includes(port)) {
-    const hp = parseHostPort(proxyip, 443);
-    if (hp) { targetHost = hp.host; targetPort = hp.port; }
-  }
   const direct = async () => {
-    try {
-      const sock = await withTimeout(connect({ hostname: targetHost, port: targetPort }), DIAL_TIMEOUT_MS, 'dial timeout');
-      return { sock, leftover: new Uint8Array(0) };
-    } catch (e) {
-      // ProxyIP 反代拨号失败时回退直连原始目标, 避免单个反代 IP 失效导致所有 HTTPS 中断
-      if (targetHost !== host || targetPort !== port) {
-        const sock = await withTimeout(connect({ hostname: host, port }), DIAL_TIMEOUT_MS, 'dial timeout');
+    const sock = await withTimeout(connect({ hostname: host, port }), DIAL_TIMEOUT_MS, 'dial timeout');
+    return { sock, leftover: new Uint8Array(0) };
+  };
+  // SOCKS5/HTTP 出站代理
+  if (outboundStr) {
+    const viaProxy = async () => {
+      const p = parseProxyUrl(outboundStr);
+      if (!p) throw new Error('bad outbound proxy');
+      if (p.scheme === 'socks5') {
+        const sock = await connectViaSocks5(p, host, port);
         return { sock, leftover: new Uint8Array(0) };
       }
-      throw e;
+      if (p.scheme === 'http') return connectViaHttp(p, host, port);
+      throw new Error('unsupported proxy scheme (仅支持 socks5/http)');
+    };
+    if (mode === 'proxy-only') return viaProxy();
+    if (mode === 'direct-first') {
+      try { return await direct(); } catch { return viaProxy(); }
     }
-  };
-  const viaProxy = async () => {
-    const p = parseProxyUrl(outboundStr);
-    if (!p) throw new Error('bad outbound proxy');
-    if (p.scheme === 'socks5') {
-      const sock = await connectViaSocks5(p, targetHost, targetPort);
-      return { sock, leftover: new Uint8Array(0) };
-    }
-    if (p.scheme === 'http') return connectViaHttp(p, targetHost, targetPort);
-    throw new Error('unsupported proxy scheme (仅支持 socks5/http)');
-  };
-  if (!outboundStr) return direct();
-  if (mode === 'proxy-only') return viaProxy();
-  if (mode === 'direct-first') {
-    try { return await direct(); } catch { return viaProxy(); }
+    try { return await viaProxy(); } catch { return direct(); } // proxy-first
   }
-  try { return await viaProxy(); } catch { return direct(); } // proxy-first
+  // ProxyIP: TLS 端口时经 ProxyIP 出站 (edgetunnel 做法: DoH 查 TXT 拿真实 IP 列表, 逐个尝试, 全失败回退直连)
+  if (proxyip && TLS_PORTS.includes(port)) {
+    try {
+      const ips = await resolveProxyIPs(cfg, proxyip);
+      for (const [ph, pp] of ips) {
+        try {
+          const sock = await withTimeout(connect({ hostname: ph, port: pp }), DIAL_TIMEOUT_MS, 'proxyip dial timeout');
+          return { sock, leftover: new Uint8Array(0) };
+        } catch (e) { /* 换下一个 IP */ }
+      }
+    } catch (e) { /* 解析失败, 回退直连 */ }
+  }
+  return direct();
 }
 
 async function connectViaSocks5(p, host, port) {
