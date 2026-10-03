@@ -1256,19 +1256,51 @@ function subClash(cfg, url) {
       '  - MATCH,🐟 漏网之鱼'
     ].join('\n');
 
+    const clashDNS =
+      'dns:\n'
+      + '  enable: true\n'
+      + '  ipv6: false\n'
+      + '  enhanced-mode: fake-ip\n'
+      + '  fake-ip-range: 198.18.0.1/16\n'
+      + '  nameserver:\n'
+      + '    - 223.5.5.5\n'
+      + '    - 119.29.29.29\n'
+      + '  fallback:\n'
+      + '    - 8.8.8.8\n'
+      + '    - 1.1.1.1\n'
+      + '  fallback-filter:\n'
+      + '    geoip: true\n'
+      + '    geoip-code: CN\n';
+
     yaml =
       '# cf-fusion 完整分流规则 (Loyalsoldier 规则集, 客户端直连获取)\n'
       + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
-      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n'
+      + clashDNS
       + 'proxies:\n' + proxies.join('\n') + '\n'
       + fullGroups + '\n'
       + fullProviders + '\n'
       + fullRules + '\n';
   } else {
+    const clashDNS =
+      'dns:\n'
+      + '  enable: true\n'
+      + '  ipv6: false\n'
+      + '  enhanced-mode: fake-ip\n'
+      + '  fake-ip-range: 198.18.0.1/16\n'
+      + '  nameserver:\n'
+      + '    - 223.5.5.5\n'
+      + '    - 119.29.29.29\n'
+      + '  fallback:\n'
+      + '    - 8.8.8.8\n'
+      + '    - 1.1.1.1\n'
+      + '  fallback-filter:\n'
+      + '    geoip: true\n'
+      + '    geoip-code: CN\n';
+
     yaml =
       '# cf-fusion 极简订阅 (本地生成, 无第三方转换)\n'
       + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
-      + 'dns:\n  enable: true\n  ipv6: false\n  nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n'
+      + clashDNS
       + 'proxies:\n' + proxies.join('\n') + '\n'
       + 'proxy-groups:\n'
       + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']\n'
@@ -1410,14 +1442,15 @@ function subSingbox(cfg, url) {
 
     const singboxDNS = {
       servers: [
-        { tag: 'remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
-        { tag: 'local', type: 'local' }
+        { tag: 'remote', type: 'udp', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'local', type: 'local' },
+        { tag: 'fakeip', type: 'fakeip', inet4_range: '198.18.0.0/15' }
       ],
       rules: [
-        { clash_mode: 'Global', server: 'remote' },
+        { clash_mode: 'Global', server: 'fakeip' },
         { clash_mode: 'Direct', server: 'local' },
         { rule_set: 'geosite-cn', server: 'local' },
-        { rule_set: 'geosite-geolocation-!cn', server: 'remote' }
+        { query_type: ['A', 'AAAA'], server: 'fakeip' }
       ],
       final: 'remote',
       strategy: 'ipv4_only'
@@ -1439,7 +1472,7 @@ function subSingbox(cfg, url) {
     };
   } else {
     outbounds.push(
-      { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...activeRegionTags, ...tags, 'direct'] },
+      { type: 'selector', tag: '🚀 节点选择', outbounds: [tags[0] || 'direct', '♻️ 自动选择', ...activeRegionTags, ...tags.slice(1), 'direct'], default: tags[0] || 'direct' },
       { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
       ...regionOutbounds,
       { type: 'direct', tag: 'direct' },
@@ -1449,13 +1482,15 @@ function subSingbox(cfg, url) {
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     const singboxDNS = {
       servers: [
-        { tag: 'remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
-        { tag: 'local', type: 'local' }
+        { tag: 'remote', type: 'udp', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'local', type: 'local' },
+        { tag: 'fakeip', type: 'fakeip', inet4_range: '198.18.0.0/15' }
       ],
       rules: [
-        { clash_mode: 'Global', server: 'remote' },
+        { clash_mode: 'Global', server: 'fakeip' },
         { clash_mode: 'Direct', server: 'local' },
-        { rule_set: 'geosite-cn', server: 'local' }
+        { rule_set: 'geosite-cn', server: 'local' },
+        { query_type: ['A', 'AAAA'], server: 'fakeip' }
       ],
       final: 'remote',
       strategy: 'ipv4_only'
