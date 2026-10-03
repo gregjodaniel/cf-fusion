@@ -18,7 +18,7 @@
 - **延迟测试**：后台一键测优选 IP 的 TCP 建连延迟并排序
 - **单连接覆盖**：在节点 path 或 query 里写 `proxyip=1.2.3.4` / `socks5=user:pass@host:port` / `http=host:port`，只影响当前节点（edgetunnel + 甬哥风格二合一）
 - **出站代理**：全局 SOCKS5 / HTTP CONNECT 出站，三种回落策略（优先代理 / 优先直连 / 只走代理防泄漏）
-- **ProxyIP**：目标为 TLS 端口时改拨反代 IP，靠客户端 TLS 的 SNI 寻路
+- **ProxyIP**：目标为 Cloudflare 官方 IP 时自动改拨第三方非 CF 跳板机，规避 Worker 自连接阻断
 - **首页伪装**：默认显示普通页面，可设 `FAKE_URL` 跳转
 - **UDP**：经 TCP 透传（DNS over TCP 兼容），满足 DNS 查询等主要 UDP 场景
 
@@ -52,7 +52,7 @@ Cloudflare Pages → 上传资产 → 把 `_worker.js`（文件名保持 `_worke
 | `ADMIN_PASS` | 后台密码 | `admin`（务必改） |
 | `SUB_KEY` | 订阅路径密钥 | UUID 去横线前 8 位 |
 | `CUSTOM_PATH` | 自定义订阅路径，设了则 UUID 路径自动禁用 | 空 |
-| `PROXYIP` | 全局反代 IP/域名，如 `1.2.3.4` 或 `proxy.example.com:443` | 空 |
+| `PROXYIP` | 全局出站跳板机（用于访问 Cloudflare 网站，严禁填 CF 优选 IP，必须是非 CF 的第三方 IP/域名） | 空 |
 | `OUTBOUND` | 全局出站代理：`socks5://user:pass@host:port` 或 `http://host:port` | 空 |
 | `OUTBOUND_MODE` | `proxy-first` 优先代理 / `direct-first` 优先直连 / `proxy-only` 只走代理 | `proxy-first` |
 | `FAKE_URL` | 首页伪装跳转地址 | 空（显示默认页） |

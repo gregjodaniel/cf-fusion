@@ -29,11 +29,11 @@ import { connect } from 'cloudflare:sockets';
 
 /* ============================== 常量与地区定义 ============================== */
 
-// 默认优选: CF 官方 IP 段(甬哥「不死 IP」理念: 默认就能用, 不用天天更新)
+// 默认优选: CF 官方 Anycast 节点 IP (默认开箱即用，国内三大运营商均有路由)
 const DEFAULT_PREFERRED_IPS = [
-  '104.16.0.0', '104.17.0.0', '104.18.0.0', '104.19.0.0', '104.20.0.0',
-  '104.21.0.0', '104.22.0.0', '104.24.0.0', '104.25.0.0', '104.26.0.0',
-  '104.27.0.0', '172.66.0.0', '172.67.0.0', '162.159.0.0',
+  '104.16.1.1', '104.17.1.1', '104.18.1.1', '104.19.1.1', '104.20.1.1',
+  '104.21.1.1', '104.22.1.1', '104.24.1.1', '104.25.1.1', '104.26.1.1',
+  '104.27.1.1', '172.67.1.1', '162.159.1.1', '1.1.1.1', '1.0.0.1'
 ];
 
 // 常见落地机房与地区分类 (Ingress 机场码 / Colo 识别)
@@ -739,7 +739,7 @@ function adminPanelHTML() {
   + '<div class="f"><label>后台密码</label><input type="text" id="c-adminPass"></div></div>'
   + '<div class="row2"><div class="f"><label>订阅路径密钥 SUB_KEY</label><input type="text" id="c-subKey"></div>'
   + '<div class="f"><label>自定义路径 (留空用上面两项, 设了则 UUID 路径禁用)</label><input type="text" id="c-customPath"></div></div>'
-  + '<div class="f"><label>全局 ProxyIP (反代 IP/域名, 如 1.2.3.4 或 proxy.example.com:443)</label><input type="text" id="c-proxyip"></div>'
+  + '<div class="f"><label>全局出站跳板 ProxyIP（用于访问 Cloudflare 网站，严禁填 CF 优选 IP，必须是非 CF 的第三方 IP 或域名，如 ProxyIP.US.CMLiussss.net）</label><input type="text" id="c-proxyip"></div>'
   + '<div class="row2"><div class="f"><label>全局出站代理 (socks5://user:pass@host:port 或 http://host:port)</label><input type="text" id="c-outbound"></div>'
   + '<div class="f"><label>出站方式</label><select id="c-outboundMode">'
   + '<option value="proxy-first">优先走代理, 失败回落直连</option>'
@@ -1065,7 +1065,7 @@ function buildNodes(cfg, host) {
 function vlessLink(cfg, host, path, d) {
   const p = new URLSearchParams({
     encryption: 'none', security: d.tls ? 'tls' : 'none',
-    sni: host, fp: 'chrome', type: 'ws', host, path: path + '?ed=2048',
+    sni: host, fp: 'chrome', type: 'ws', host, path, ed: '2048',
   });
   return 'vless://' + cfg.uuid + '@' + d.ip + ':' + d.port + '?' + p.toString() + '#' + encodeURIComponent(d.name);
 }
@@ -1298,7 +1298,7 @@ function subSingbox(cfg, url) {
       outbounds.push({
         type: 'vless', tag, server: n.ip, server_port: n.port, uuid: cfg.uuid,
         tls: { enabled: n.tls, server_name: host, utls: { enabled: true, fingerprint: 'chrome' } },
-        transport: { type: 'ws', path: '/' + key + '?ed=2048', headers: { Host: host } },
+        transport: { type: 'ws', path: '/' + key, headers: { Host: host }, max_early_data: 2048, early_data_header_name: 'Sec-WebSocket-Protocol' },
       });
     }
     if (cfg.pTrojan) {
@@ -1404,9 +1404,24 @@ function subSingbox(cfg, url) {
       { rule_set: 'geoip-cn', outbound: 'direct' },
     ];
 
+    const singboxDNS = {
+      servers: [
+        { tag: 'remote', address: 'https://1.1.1.1/dns-query', detour: '🚀 节点选择' },
+        { tag: 'local', address: '223.5.5.5', detour: 'direct' }
+      ],
+      rules: [
+        { outbound: 'any', server: 'local' },
+        { clash_mode: 'Global', server: 'remote' },
+        { clash_mode: 'Direct', server: 'local' },
+        { rule_set: 'geosite-cn', server: 'local' }
+      ],
+      final: 'remote',
+      strategy: 'ipv4_only'
+    };
+
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'udp', server: '223.5.5.5' }] },
+      dns: singboxDNS,
       outbounds: fullOutbounds,
       route: {
         default_domain_resolver: 'local',
@@ -1428,9 +1443,23 @@ function subSingbox(cfg, url) {
     );
     const miniSrsSite = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite';
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
+    const singboxDNS = {
+      servers: [
+        { tag: 'remote', address: 'https://1.1.1.1/dns-query', detour: '🚀 节点选择' },
+        { tag: 'local', address: '223.5.5.5', detour: 'direct' }
+      ],
+      rules: [
+        { outbound: 'any', server: 'local' },
+        { clash_mode: 'Global', server: 'remote' },
+        { clash_mode: 'Direct', server: 'local' },
+        { rule_set: 'geosite-cn', server: 'local' }
+      ],
+      final: 'remote',
+      strategy: 'ipv4_only'
+    };
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'udp', server: '223.5.5.5' }] },
+      dns: singboxDNS,
       outbounds,
       route: {
         default_domain_resolver: 'local',
@@ -1441,6 +1470,9 @@ function subSingbox(cfg, url) {
           { tag: 'geoip-private', type: 'remote', format: 'binary', url: `${miniSrsIp}/private.srs` },
         ],
         rules: [
+          { action: 'sniff' },
+          { protocol: 'dns', action: 'hijack-dns' },
+          { ip_is_private: true, outbound: 'direct' },
           { rule_set: ['geosite-cn', 'geoip-cn', 'geoip-private'], outbound: 'direct' },
         ],
         final: '🚀 节点选择',
