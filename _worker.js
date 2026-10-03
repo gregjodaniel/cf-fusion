@@ -1034,7 +1034,7 @@ function buildNodes(cfg, host) {
   for (const raw of ips) {
     const item = parseNodeItem(raw);
     if (!item.ip) continue;
-    const ports = item.explicitPort ? [item.explicitPort] : [443, 80];
+    const ports = item.explicitPort ? [item.explicitPort] : [443];
     const coloInfo = coloMap[item.ip];
     const reg = identifyRegion(item.remark, coloInfo);
     for (const port of ports) {
@@ -1066,9 +1066,10 @@ function buildNodes(cfg, host) {
   }));
 }
 function vlessLink(cfg, host, path, d) {
+  const wsPath = path + (d.tls ? '?ed=2048' : '');
   const p = new URLSearchParams({
     encryption: 'none', security: d.tls ? 'tls' : 'none',
-    sni: host, fp: 'chrome', type: 'ws', host, path, ed: '2048',
+    sni: host, fp: 'chrome', type: 'ws', host, path: wsPath,
   });
   return 'vless://' + cfg.uuid + '@' + d.ip + ':' + d.port + '?' + p.toString() + '#' + encodeURIComponent(d.name);
 }
@@ -1410,13 +1411,13 @@ function subSingbox(cfg, url) {
     const singboxDNS = {
       servers: [
         { tag: 'remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
-        { tag: 'local', type: 'udp', server: '223.5.5.5', detour: 'direct' }
+        { tag: 'local', type: 'local' }
       ],
       rules: [
-        { outbound: 'any', server: 'local' },
         { clash_mode: 'Global', server: 'remote' },
         { clash_mode: 'Direct', server: 'local' },
-        { rule_set: 'geosite-cn', server: 'local' }
+        { rule_set: 'geosite-cn', server: 'local' },
+        { rule_set: 'geosite-geolocation-!cn', server: 'remote' }
       ],
       final: 'remote',
       strategy: 'ipv4_only'
@@ -1449,10 +1450,9 @@ function subSingbox(cfg, url) {
     const singboxDNS = {
       servers: [
         { tag: 'remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
-        { tag: 'local', type: 'udp', server: '223.5.5.5', detour: 'direct' }
+        { tag: 'local', type: 'local' }
       ],
       rules: [
-        { outbound: 'any', server: 'local' },
         { clash_mode: 'Global', server: 'remote' },
         { clash_mode: 'Direct', server: 'local' },
         { rule_set: 'geosite-cn', server: 'local' }
