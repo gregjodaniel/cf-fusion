@@ -712,8 +712,8 @@ function adminPanelHTML() {
   + '.btn.ghost{background:#fff;color:#1677ff;border:1px solid #1677ff}'
   + '.btn.danger{background:#fff;color:#e5484d;border:1px solid #e5484d}'
   + '.btn:active{opacity:.85}.hide{display:none}'
-  + '.msg{padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:14px;display:none}'
-  + '.msg.ok{display:block;background:#e6f7e6;color:#1a7f37}.msg.err{display:block;background:#fdecea;color:#c62828}'
+  + '.msg{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:9999;padding:12px 24px;border-radius:24px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.2);font-weight:600;display:none;max-width:90%;text-align:center}'
+  + '.msg.ok{display:block;background:#2e7d32;color:#fff}.msg.err{display:block;background:#d32f2f;color:#fff}'
   + 'table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}'
   + 'th{background:#fafafa;color:#666}.mono{font-family:monospace;font-size:12px;word-break:break-all}'
   + '#login{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99}'
@@ -753,7 +753,7 @@ function adminPanelHTML() {
   + '<div class="chk"><input type="checkbox" id="c-pSs"><label for="c-pSs">启用 Shadowsocks (简化版, 密码=UUID)</label></div>'
   + '<div class="chk"><input type="checkbox" id="c-logConn"><label for="c-logConn">记录连接日志 (存 KV, 最多 100 条)</label></div>'
   + '<div class="chk"><input type="checkbox" id="c-enableVg"><label for="c-enableVg">启用家宽链式代理 (实验性: 仅支持 mihomo/Clash Meta 内核)</label></div>'
-  + '<button class="btn" onclick="saveConfig()">保存</button>'
+  + '<button class="btn" id="btnSaveCfg" onclick="saveConfig(this)">保存</button>'
   + '<button class="btn ghost" onclick="loadConfig()">重新加载</button>'
   + '<button class="btn danger" onclick="resetConfig()">清空面板配置(回退到环境变量)</button></div>'
   // 优选 IP tab
@@ -812,7 +812,7 @@ function adminPanelHTML() {
   + 'document.getElementById("c-logConn").checked=!!c.logConn;'
   + 'document.getElementById("c-enableVg").checked=!!c.enableVg;'
   + '}).catch(function(e){showMsg(e.message,false);});}'
-  + 'function saveConfig(){var c={};'
+  + 'function saveConfig(btn){btn=btn||document.getElementById("btnSaveCfg");if(btn){btn.disabled=true;btn.textContent="保存中...";}var c={};'
   + '["uuid","adminPass","subKey","customPath","proxyip","outbound","outboundMode","fakeUrl","doh"].forEach(function(k){'
   + 'c[k]=document.getElementById("c-"+k).value.trim();});'
   + 'c.maxNodes=parseInt(document.getElementById("c-maxNodes").value)||24;'
@@ -823,8 +823,10 @@ function adminPanelHTML() {
   + 'c.enableVg=document.getElementById("c-enableVg").checked;'
   + 'api("ips").then(function(d){c.preferredIps=d.ips;'
   + 'return api("config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});})'
-  + '.then(function(r){if(r.ok){showMsg("保存成功, 已立即生效",true);if(c.adminPass&&c.adminPass!==pw){pw=c.adminPass;sessionStorage.setItem("cfu_pw",pw);}}'
-  + 'else showMsg("保存失败: "+(r.error||""),false);}).catch(function(e){showMsg(e.message,false);});}'
+  + '.then(function(r){if(btn){btn.disabled=false;btn.textContent="✓ 保存成功";setTimeout(function(){btn.textContent="保存";},2000);}'
+  + 'if(r.ok){showMsg("保存成功, 已立即生效",true);if(c.adminPass&&c.adminPass!==pw){pw=c.adminPass;sessionStorage.setItem("cfu_pw",pw);}}'
+  + 'else showMsg("保存失败: "+(r.error||""),false);}).catch(function(e){if(btn){btn.disabled=false;btn.textContent="保存";}'
+  + 'showMsg(e.message,false);});}'
   + 'function resetConfig(){if(!confirm("清空面板配置并回退到环境变量?"))return;'
   + 'api("config",{method:"DELETE"}).then(function(){showMsg("已清空, 重新加载中",true);loadConfig();loadIps();});}'
   + 'function loadIps(){api("ips").then(function(d){document.getElementById("ips").value=(d.ips||[]).join("\\n");'
@@ -880,6 +882,7 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
       let body;
       try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
       if (body.uuid && !isValidUUID(body.uuid)) return json({ error: 'uuid 格式不正确' }, 400);
+      if (!env.KV) return json({ error: 'Worker 缺少 KV 绑定，请检查 wrangler.toml 的 kv_namespaces 配置' }, 500);
       const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
       const next = { ...kvc };
       for (const k of ['uuid','adminPass','subKey','customPath','proxyip','outbound','outboundMode','fakeUrl','doh','maxNodes','pVless','pTrojan','pSs','logConn','preferredIps']) {

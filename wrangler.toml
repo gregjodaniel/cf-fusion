@@ -3,26 +3,15 @@ name = "cf-fusion"
 main = "_worker.js"
 compatibility_date = "2025-01-01"
 
-# 可选: 绑定 KV 命名空间(用于图形化配置 / 优选 IP / 连接日志)
-# 先在 Cloudflare 控制台创建 KV, 再把 ID 填到下面并取消注释
-# [[kv_namespaces]]
-# binding = "KV"
-# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# 绑定 KV 命名空间(用于图形化配置 / 优选 IP / 连接日志)
+[[kv_namespaces]]
+binding = "KV"
+id = "52626c478acf403d9f50187aabb36472"
 
 [vars]
-# 后台密码, 务必修改! 也可在部署后的管理面板里改
-ADMIN_PASS = "admin"
-
-# 以下全部可选, 不填则用默认值; 面板里的配置会覆盖这里
-# UUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # VLESS UUID / Trojan 密码, 不填自动生成
-# SUB_KEY = "abcd1234"                          # 订阅路径密钥, 不填取 UUID 前 8 位
-# CUSTOM_PATH = ""                              # 自定义订阅路径, 设了则 UUID 路径禁用
-# PROXYIP = ""                                  # 全局反代, 如 1.2.3.4 或 proxy.example.com:443
-# OUTBOUND = ""                                 # 全局出站代理: socks5://user:pass@host:port 或 http://host:port
-# OUTBOUND_MODE = "proxy-first"                 # proxy-first / direct-first / proxy-only
-# FAKE_URL = ""                                 # 首页伪装跳转地址
-# P_VLESS = "1"                                 # 1/0 协议开关
-# P_TROJAN = "1"
-# P_SS = "0"
-# MAX_NODES = "24"                              # 订阅最多生成节点数
-# ENABLE_VG = "0"                               # 家宽链式代理开关: 1/0 (默认 0 关闭, 仅支持 mihomo)
+# 后台密码
+ADMIN_PASS = "joyboy"
+# 自定义订阅路径
+CUSTOM_PATH = "shan"
+# 全局反代 IP / 域名
+PROXYIP = "ProxyIP.US.CMLiussss.net"
