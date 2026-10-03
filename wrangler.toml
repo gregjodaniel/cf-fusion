@@ -3,15 +3,14 @@ name = "cf-fusion"
 main = "_worker.js"
 compatibility_date = "2025-01-01"
 
-# 可选: 绑定 KV 命名空间(用于图形化配置 / 优选 IP / 连接日志)
-# 先在 Cloudflare 控制台创建 KV, 再把 ID 填到下面并取消注释
-# [[kv_namespaces]]
-# binding = "KV"
-# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# 绑定 KV 命名空间(用于图形化配置 / 优选 IP / 连接日志)
+[[kv_namespaces]]
+binding = "KV"
+id = "52626c478acf403d9f50187aabb36472"
 
 [vars]
 # 后台密码, 务必修改! 也可在部署后的管理面板里改
-ADMIN_PASS = "admin"
+ADMIN_PASS = "joyboy"
 
 # 以下全部可选, 不填则用默认值; 面板里的配置会覆盖这里
 # UUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # VLESS UUID / Trojan 密码, 不填自动生成

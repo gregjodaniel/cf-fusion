@@ -391,7 +391,7 @@ async function getConfig(env) {
 
   const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
   const coloMap = (await kvGetJSON(env, 'cfu:colos')) || {};
-  let uuid = kvc.uuid || env.UUID || '';
+  let uuid = String(kvc.uuid || env.UUID || '').trim();
   if (!isValidUUID(uuid)) {
     if (_memUUID && isValidUUID(_memUUID)) uuid = _memUUID;
     else {
@@ -402,8 +402,8 @@ async function getConfig(env) {
   }
   const cfg = {
     uuid,
-    adminPass: kvc.adminPass || env.ADMIN_PASS || 'admin',
-    subKey: kvc.subKey || env.SUB_KEY || uuid.replace(/-/g, '').slice(0, 8),
+    adminPass: String(kvc.adminPass || env.ADMIN_PASS || 'admin').trim(),
+    subKey: String(kvc.subKey || env.SUB_KEY || uuid.replace(/-/g, '').slice(0, 8)).trim(),
     customPath: (kvc.customPath || env.CUSTOM_PATH || '').replace(/^\/+|\/+$/g, ''),
     proxyip: (kvc.proxyip || env.PROXYIP || '').trim(),
     outbound: (kvc.outbound || env.OUTBOUND || '').trim(),
@@ -434,7 +434,7 @@ function isAuthed(request, cfg) {
   const h = request.headers.get('Authorization') || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   if (!m) return false;
-  const a = m[1], b = cfg.adminPass;
+  const a = m[1].trim(), b = (cfg.adminPass || '').trim();
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
@@ -514,7 +514,7 @@ export default {
     }
 
     // 3.5) 出站诊断 (需要 admin 密码)
-    if (segs[0] === 'diag' && url.searchParams.get('key') === cfg.adminPass) {
+    if (segs[0] === 'diag' && (url.searchParams.get('key') || '').trim() === cfg.adminPass) {
       const out = { time: new Date().toISOString(), proxyip: cfg.proxyip || '(empty)', doh: cfg.doh };
       // a) 直接拨号测试
       try {
