@@ -1474,8 +1474,8 @@ function subSingbox(cfg, url) {
       servers: [
         { tag: 'dns-remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
         { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
-        { tag: 'dns-direct', type: 'udp', server: '223.5.5.5', detour: 'direct' },
-        { tag: 'dns-local', type: 'local', detour: 'direct' },
+        { tag: 'dns-direct', type: 'udp', server: '223.5.5.5' },
+        { tag: 'dns-local', type: 'local' },
       ],
       rules: [
         { clash_mode: 'Direct', server: 'dns-direct' },
@@ -1518,8 +1518,8 @@ function subSingbox(cfg, url) {
       servers: [
         { tag: 'dns-remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
         { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
-        { tag: 'dns-direct', type: 'udp', server: '223.5.5.5', detour: 'direct' },
-        { tag: 'dns-local', type: 'local', detour: 'direct' },
+        { tag: 'dns-direct', type: 'udp', server: '223.5.5.5' },
+        { tag: 'dns-local', type: 'local' },
       ],
       rules: [
         { clash_mode: 'Direct', server: 'dns-direct' },
