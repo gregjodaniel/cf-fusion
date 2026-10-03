@@ -1406,8 +1406,8 @@ function subSingbox(cfg, url) {
 
     const singboxDNS = {
       servers: [
-        { tag: 'remote', address: 'https://1.1.1.1/dns-query', detour: '🚀 节点选择' },
-        { tag: 'local', address: '223.5.5.5', detour: 'direct' }
+        { tag: 'remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
+        { tag: 'local', type: 'udp', server: '223.5.5.5', detour: 'direct' }
       ],
       rules: [
         { outbound: 'any', server: 'local' },
@@ -1445,8 +1445,8 @@ function subSingbox(cfg, url) {
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     const singboxDNS = {
       servers: [
-        { tag: 'remote', address: 'https://1.1.1.1/dns-query', detour: '🚀 节点选择' },
-        { tag: 'local', address: '223.5.5.5', detour: 'direct' }
+        { tag: 'remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
+        { tag: 'local', type: 'udp', server: '223.5.5.5', detour: 'direct' }
       ],
       rules: [
         { outbound: 'any', server: 'local' },
