@@ -483,7 +483,7 @@ export default {
       if (!segs.length || !validSubPath(segs[0], cfg)) {
         return new Response('Forbidden', { status: 403 });
       }
-      return handleWS(request, env, cfg, segs.slice(1));
+      return handleWS(request, env, ctx, cfg, segs.slice(1));
     }
 
     // 2) 管理后台
@@ -1065,7 +1065,7 @@ function buildNodes(cfg, host) {
 function vlessLink(cfg, host, path, d) {
   const p = new URLSearchParams({
     encryption: 'none', security: d.tls ? 'tls' : 'none',
-    sni: host, fp: 'chrome', type: 'ws', host, path,
+    sni: host, fp: 'chrome', type: 'ws', host, path: path + '?ed=2048',
   });
   return 'vless://' + cfg.uuid + '@' + d.ip + ':' + d.port + '?' + p.toString() + '#' + encodeURIComponent(d.name);
 }
@@ -1115,7 +1115,7 @@ function subClash(cfg, url) {
       proxies.push('  - name: ' + q(nm + '-vless') + '\n    type: vless\n    server: ' + n.ip + '\n    port: ' + n.port
         + '\n    uuid: ' + cfg.uuid + '\n    tls: ' + (n.tls ? 'true' : 'false')
         + '\n    servername: ' + host + '\n    client-fingerprint: chrome\n    network: ws'
-        + '\n    ws-opts:\n      path: /' + key + '\n      headers:\n        Host: ' + host);
+        + '\n    ws-opts:\n      path: /' + key + '?ed=2048\n      headers:\n        Host: ' + host);
     }
     if (cfg.pTrojan) {
       proxies.push('  - name: ' + q(nm + '-trojan') + '\n    type: trojan\n    server: ' + n.ip + '\n    port: ' + n.port
@@ -1298,7 +1298,7 @@ function subSingbox(cfg, url) {
       outbounds.push({
         type: 'vless', tag, server: n.ip, server_port: n.port, uuid: cfg.uuid,
         tls: { enabled: n.tls, server_name: host, utls: { enabled: true, fingerprint: 'chrome' } },
-        transport: { type: 'ws', path: '/' + key, headers: { Host: host } },
+        transport: { type: 'ws', path: '/' + key + '?ed=2048', headers: { Host: host } },
       });
     }
     if (cfg.pTrojan) {
@@ -1596,7 +1596,7 @@ async function handleHomeBroadbandSub(cfg, url) {
       '  - name: ' + q(fn) + '\n    type: vless\n    server: ' + n.ip + '\n    port: ' + n.port
       + '\n    uuid: ' + cfg.uuid + '\n    tls: ' + (n.tls ? 'true' : 'false')
       + '\n    servername: ' + host + '\n    client-fingerprint: chrome\n    network: ws'
-      + '\n    ws-opts:\n      path: /' + (cfg.customPath || cfg.subKey) + '\n      headers:\n        Host: ' + host
+      + '\n    ws-opts:\n      path: /' + (cfg.customPath || cfg.subKey) + '?ed=2048\n      headers:\n        Host: ' + host
     );
   }
 
@@ -1685,21 +1685,41 @@ async function handleHomeBroadbandSub(cfg, url) {
 
 /* ============================== WebSocket 代理核心 ============================== */
 
-async function handleWS(request, env, cfg, extraSegs) {
+async function handleWS(request, env, ctx, cfg, extraSegs) {
   const pair = new WebSocketPair();
   const client = pair[0], server = pair[1];
   server.accept();
   const url = new URL(request.url);
   const overrides = parseOverrides(url, extraSegs);
-  // 不 await: 握手响应(101)先返回, 连接处理在后台跑
-  handleConnection(server, env, cfg, overrides, extraSegs).catch(() => {
+
+  // Early Data (0-RTT) 支持: 客户端可能将首包放在 Sec-WebSocket-Protocol 头中
+  const earlyDataHeader = request.headers.get('sec-websocket-protocol') || '';
+  let earlyData = null;
+  if (earlyDataHeader) {
+    try {
+      const b64 = earlyDataHeader.replace(/-/g, '+').replace(/_/g, '/');
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      earlyData = arr;
+    } catch {}
+  }
+
+  // 保持 Worker 协程活跃，防止在 101 返回后被边缘环境提前回收
+  const p = handleConnection(server, env, cfg, overrides, extraSegs, earlyData).catch(() => {
     try { server.close(1011, 'internal error'); } catch {}
   });
-  return new Response(null, { status: 101, webSocket: client });
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
+
+  const respHeaders = {};
+  if (earlyDataHeader) {
+    respHeaders['Sec-WebSocket-Protocol'] = earlyDataHeader;
+  }
+  return new Response(null, { status: 101, webSocket: client, headers: respHeaders });
 }
 
-async function handleConnection(ws, env, cfg, overrides, extraSegs) {
-  const reader = makeWSReader(ws);
+async function handleConnection(ws, env, cfg, overrides, extraSegs, earlyData) {
+  const reader = makeWSReader(ws, earlyData);
   const isSS = cfg.pSs && extraSegs.some(s => s.toLowerCase() === 'ss');
 
   // 读够字节做协议嗅探 (VLESS 首字节 0x00+UUID / Trojan 首 56 字节为密码哈希)
@@ -1716,6 +1736,18 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs) {
   }
   if (!sess) { ws.close(1008, 'bad request'); return; }
   reader.consume(sess.headerLen);
+
+  // UDP 专有处理: 若为 DNS 查询 (53 端口), 走 DoH (https://cloudflare-dns.com/dns-query) 快速响应
+  // 彻底规避 Cloudflare Workers 无 UDP 出站能力导致全网无法解析域名的致命问题
+  if (sess.udp) {
+    if (sess.port === 53) {
+      await handleDnsUdp(ws, reader, sess, cfg);
+      return;
+    }
+    ws.close(1003, 'UDP only supported for DNS (port 53)');
+    return;
+  }
+
   let dial;
   try {
     dial = await dialOut(cfg, overrides, sess.host, sess.port);
@@ -1729,54 +1761,67 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs) {
   ws.addEventListener('close', closeSock);
   ws.addEventListener('error', closeSock);
 
-  if (sess.udp) {
-    if (sess.responsePrefix.length) ws.send(sess.responsePrefix);
-    await handleUDP(ws, reader, sock, sess);
-    return;
-  }
   const writer = sock.writable.getWriter();
   ws.addEventListener('close', () => { try { writer.releaseLock(); } catch {} });
   // 切换为直通模式: 已缓冲的(去掉协议头后)数据先发, 后续消息实时转发
   reader.setForward(async (d) => { await writer.write(d); });
-  await pumpSocketToWS(sock, ws, [sess.responsePrefix, dial.leftover]);
+  // 关键修复: 将 2 字节 VLESS 头 (或响应前缀) 与远端返回的首包数据合并发送, 严禁提前独立发送空头
+  await pumpSocketToWS(sock, ws, sess.responsePrefix, dial.leftover);
 }
 
-/* ---- UDP: 按 2 字节长度切包, 经 TCP 转发(DNS over TCP 兼容, 这是此类脚本的通用做法) ---- */
-async function handleUDP(ws, reader, sock, sess) {
-  const writer = sock.writable.getWriter();
-  const sreader = new SocketReader(sock.readable);
+/* ---- DNS over HTTPS: 代理 UDP 53 端口查询 ---- */
+async function handleDnsUdp(ws, reader, sess, cfg) {
+  let headerToSend = sess.responsePrefix && sess.responsePrefix.length ? sess.responsePrefix : null;
+  const dohUrl = cfg.doh || 'https://cloudflare-dns.com/dns-query';
+
   let udpBuf = new Uint8Array(0);
+  async function processDnsQuery(msg) {
+    try {
+      const resp = await fetch(dohUrl, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/dns-message',
+          'Content-Type': 'application/dns-message',
+        },
+        body: msg,
+      });
+      if (!resp.ok) return;
+      const resBuf = await resp.arrayBuffer();
+      const resBytes = new Uint8Array(resBuf);
+      const lenBuf = new Uint8Array([(resBytes.length >> 8) & 0xff, resBytes.length & 0xff]);
+      if (ws.readyState !== 1) return;
+      if (headerToSend) {
+        ws.send(concatBytes(headerToSend, lenBuf, resBytes));
+        headerToSend = null;
+      } else {
+        ws.send(concatBytes(lenBuf, resBytes));
+      }
+    } catch {}
+  }
+
   reader.setForward(async (d) => {
     udpBuf = concatBytes(udpBuf, d);
     while (udpBuf.length >= 2) {
       const len = (udpBuf[0] << 8) | udpBuf[1];
       if (udpBuf.length < 2 + len) break;
-      const pkt = udpBuf.slice(0, 2 + len);
+      const dnsMsg = udpBuf.slice(2, 2 + len);
       udpBuf = udpBuf.slice(2 + len);
-      await writer.write(pkt); // TCP 承载的 DNS 同样是 2 字节长度前缀, 直接透传
+      await processDnsQuery(dnsMsg);
     }
   });
-  try {
-    for (;;) {
-      const lh = await sreader.readExactly(2, 15000);
-      const len = (lh[0] << 8) | lh[1];
-      if (len > 65535) break;
-      const data = await sreader.readExactly(len, 15000);
-      if (ws.readyState !== 1) break;
-      ws.send(concatBytes(lh, data)); // VLESS/Trojan UDP 回包: 2 字节长度 + 数据
-    }
-  } catch {} finally {
-    try { writer.releaseLock(); } catch {}
-    sreader.release();
-    try { ws.close(); } catch {}
-    try { sock.close(); } catch {}
-  }
 }
 
-async function pumpSocketToWS(sock, ws, prefixes) {
+/* ---- 远端 Socket 数据流推送到 WebSocket (严格保证协议响应头与首包合并) ---- */
+async function pumpSocketToWS(sock, ws, responsePrefix, leftover) {
+  let headerToSend = responsePrefix && responsePrefix.length ? responsePrefix : null;
   try {
-    for (const p of prefixes) {
-      if (p && p.length && ws.readyState === 1) ws.send(p);
+    if (leftover && leftover.length) {
+      if (headerToSend) {
+        ws.send(concatBytes(headerToSend, leftover));
+        headerToSend = null;
+      } else {
+        ws.send(leftover);
+      }
     }
     const r = sock.readable.getReader();
     try {
@@ -1784,7 +1829,12 @@ async function pumpSocketToWS(sock, ws, prefixes) {
         const { done, value } = await r.read();
         if (done) break;
         if (ws.readyState !== 1) break;
-        ws.send(value);
+        if (headerToSend) {
+          ws.send(concatBytes(headerToSend, value));
+          headerToSend = null;
+        } else {
+          ws.send(value);
+        }
       }
     } finally { r.releaseLock(); }
   } catch {} finally {
@@ -1793,9 +1843,9 @@ async function pumpSocketToWS(sock, ws, prefixes) {
   }
 }
 
-/* ---- WS 带缓冲读取器: 握手阶段缓存, 握手完成后切换直通 ---- */
-function makeWSReader(ws) {
-  const queue = [];
+/* ---- WS 带缓冲读取器: 支持 Early Data、握手阶段缓存、握手完成后切换直通 ---- */
+function makeWSReader(ws, earlyData) {
+  const queue = earlyData && earlyData.length ? [earlyData] : [];
   let forward = null;
   let closed = false;
   let waiter = null;
@@ -2015,8 +2065,8 @@ async function dialOut(cfg, overrides, host, port) {
         targetIsCF = isCloudflareIP(host);
       } else {
         // 域名: DoH 查 A 记录判断是否为 CF IP
-        const dohUrl = 'https://cloudflare-dns.com/dns-query';
-        const aRecs = await _dohQuery(dohUrl, host, 'A');
+        const dohUrl = cfg.doh || 'https://cloudflare-dns.com/dns-query';
+        const aRecs = await withTimeout(_dohQuery(dohUrl, host, 'A'), 2500, 'doh timeout');
         targetIsCF = aRecs.some(isCloudflareIP);
       }
     } catch (e) { /* 解析失败则默认直连 */ }
