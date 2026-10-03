@@ -1374,6 +1374,18 @@ function subSingbox(cfg, url) {
     }
   }
 
+  const inbounds = [
+    {
+      type: 'tun',
+      tag: 'tun-in',
+      address: ['172.19.0.1/30'],
+      auto_route: true,
+      strict_route: true,
+      stack: 'mixed',
+      sniff: true,
+    }
+  ];
+
   let conf;
   if (isFull) {
     const srsSite = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite';
@@ -1442,26 +1454,31 @@ function subSingbox(cfg, url) {
 
     const singboxDNS = {
       servers: [
-        { tag: 'remote', type: 'udp', server: '8.8.8.8', detour: '🚀 节点选择' },
-        { tag: 'local', type: 'local' },
-        { tag: 'fakeip', type: 'fakeip', inet4_range: '198.18.0.0/15' }
+        { tag: 'dns-remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
+        { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'dns-direct', type: 'udp', server: '223.5.5.5', detour: 'direct' },
+        { tag: 'dns-local', type: 'local', detour: 'direct' },
+        { tag: 'dns-block', type: 'rcode', code: 'REFUSED' },
       ],
       rules: [
-        { clash_mode: 'Global', server: 'fakeip' },
-        { clash_mode: 'Direct', server: 'local' },
-        { rule_set: 'geosite-cn', server: 'local' },
-        { query_type: ['A', 'AAAA'], server: 'fakeip' }
+        { clash_mode: 'Direct', server: 'dns-direct' },
+        { clash_mode: 'Global', server: 'dns-remote' },
+        { rule_set: 'geosite-category-ads-all', server: 'dns-block' },
+        { rule_set: 'geosite-cn', server: 'dns-direct' },
+        { rule_set: 'geosite-apple-cn', server: 'dns-direct' },
+        { rule_set: 'geosite-microsoft@cn', server: 'dns-direct' },
       ],
-      final: 'remote',
+      final: 'dns-remote',
       strategy: 'ipv4_only'
     };
 
     conf = {
       log: { level: 'info' },
       dns: singboxDNS,
+      inbounds,
       outbounds: fullOutbounds,
       route: {
-        default_domain_resolver: 'local',
+        default_domain_resolver: 'dns-direct',
         default_http_client: 'http-direct',
         rule_set: ruleSets,
         rules: fullRouteRules,
@@ -1482,25 +1499,27 @@ function subSingbox(cfg, url) {
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     const singboxDNS = {
       servers: [
-        { tag: 'remote', type: 'udp', server: '8.8.8.8', detour: '🚀 节点选择' },
-        { tag: 'local', type: 'local' },
-        { tag: 'fakeip', type: 'fakeip', inet4_range: '198.18.0.0/15' }
+        { tag: 'dns-remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
+        { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'dns-direct', type: 'udp', server: '223.5.5.5', detour: 'direct' },
+        { tag: 'dns-local', type: 'local', detour: 'direct' },
+        { tag: 'dns-block', type: 'rcode', code: 'REFUSED' },
       ],
       rules: [
-        { clash_mode: 'Global', server: 'fakeip' },
-        { clash_mode: 'Direct', server: 'local' },
-        { rule_set: 'geosite-cn', server: 'local' },
-        { query_type: ['A', 'AAAA'], server: 'fakeip' }
+        { clash_mode: 'Direct', server: 'dns-direct' },
+        { clash_mode: 'Global', server: 'dns-remote' },
+        { rule_set: 'geosite-cn', server: 'dns-direct' },
       ],
-      final: 'remote',
+      final: 'dns-remote',
       strategy: 'ipv4_only'
     };
     conf = {
       log: { level: 'info' },
       dns: singboxDNS,
+      inbounds,
       outbounds,
       route: {
-        default_domain_resolver: 'local',
+        default_domain_resolver: 'dns-direct',
         default_http_client: 'http-direct',
         rule_set: [
           { tag: 'geosite-cn', type: 'remote', format: 'binary', url: `${miniSrsSite}/cn.srs` },
@@ -1511,7 +1530,9 @@ function subSingbox(cfg, url) {
           { action: 'sniff' },
           { protocol: 'dns', action: 'hijack-dns' },
           { ip_is_private: true, outbound: 'direct' },
-          { rule_set: ['geosite-cn', 'geoip-cn', 'geoip-private'], outbound: 'direct' },
+          { rule_set: 'geoip-private', outbound: 'direct' },
+          { rule_set: 'geosite-cn', outbound: 'direct' },
+          { rule_set: 'geoip-cn', outbound: 'direct' },
         ],
         final: '🚀 节点选择',
         auto_detect_interface: true,
