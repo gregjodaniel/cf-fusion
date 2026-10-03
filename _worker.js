@@ -1406,9 +1406,10 @@ function subSingbox(cfg, url) {
 
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query', domain_resolver: 'bootstrap' }] },
+      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'udp', server: '223.5.5.5' }] },
       outbounds: fullOutbounds,
       route: {
+        default_domain_resolver: 'local',
         default_http_client: 'http-direct',
         rule_set: ruleSets,
         rules: fullRouteRules,
@@ -1429,9 +1430,10 @@ function subSingbox(cfg, url) {
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     conf = {
       log: { level: 'info' },
-      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'https', server: 'https://dns.alidns.com/dns-query', domain_resolver: 'bootstrap' }] },
+      dns: { servers: [{ tag: 'bootstrap', type: 'udp', server: '223.5.5.5' }, { tag: 'local', type: 'udp', server: '223.5.5.5' }] },
       outbounds,
       route: {
+        default_domain_resolver: 'local',
         default_http_client: 'http-direct',
         rule_set: [
           { tag: 'geosite-cn', type: 'remote', format: 'binary', url: `${miniSrsSite}/cn.srs` },
