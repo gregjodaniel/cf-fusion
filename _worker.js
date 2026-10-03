@@ -1266,8 +1266,8 @@ function subClash(cfg, url) {
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
       + '  fallback:\n'
-      + '    - 8.8.8.8\n'
-      + '    - 1.1.1.1\n'
+      + '    - https://1.1.1.1/dns-query\n'
+      + '    - https://8.8.8.8/dns-query\n'
       + '  fallback-filter:\n'
       + '    geoip: true\n'
       + '    geoip-code: CN\n';
@@ -1291,8 +1291,8 @@ function subClash(cfg, url) {
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
       + '  fallback:\n'
-      + '    - 8.8.8.8\n'
-      + '    - 1.1.1.1\n'
+      + '    - https://1.1.1.1/dns-query\n'
+      + '    - https://8.8.8.8/dns-query\n'
       + '  fallback-filter:\n'
       + '    geoip: true\n'
       + '    geoip-code: CN\n';
@@ -1314,7 +1314,7 @@ function subClash(cfg, url) {
       + '  - IP-CIDR,10.0.0.0/8,🎯 全球直连,no-resolve\n'
       + '  - IP-CIDR,172.16.0.0/12,🎯 全球直连,no-resolve\n'
       + '  - IP-CIDR,127.0.0.0/8,🎯 全球直连,no-resolve\n'
-      + '  - GEOIP,CN,🎯 全球直连\n'
+      + '  - GEOIP,CN,🎯 全球直连,no-resolve\n'
       + '  - MATCH,🚀 节点选择\n';
   }
   return new Response(yaml, { headers: { 'Content-Type': 'text/yaml;charset=utf-8' } });
@@ -1458,12 +1458,11 @@ function subSingbox(cfg, url) {
         { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
         { tag: 'dns-direct', type: 'udp', server: '223.5.5.5', detour: 'direct' },
         { tag: 'dns-local', type: 'local', detour: 'direct' },
-        { tag: 'dns-block', type: 'rcode', code: 'REFUSED' },
       ],
       rules: [
         { clash_mode: 'Direct', server: 'dns-direct' },
         { clash_mode: 'Global', server: 'dns-remote' },
-        { rule_set: 'geosite-category-ads-all', server: 'dns-block' },
+        { rule_set: 'geosite-category-ads-all', action: 'reject' },
         { rule_set: 'geosite-cn', server: 'dns-direct' },
         { rule_set: 'geosite-apple-cn', server: 'dns-direct' },
         { rule_set: 'geosite-microsoft@cn', server: 'dns-direct' },
@@ -1503,7 +1502,6 @@ function subSingbox(cfg, url) {
         { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
         { tag: 'dns-direct', type: 'udp', server: '223.5.5.5', detour: 'direct' },
         { tag: 'dns-local', type: 'local', detour: 'direct' },
-        { tag: 'dns-block', type: 'rcode', code: 'REFUSED' },
       ],
       rules: [
         { clash_mode: 'Direct', server: 'dns-direct' },
