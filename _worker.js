@@ -1118,13 +1118,13 @@ function subClash(cfg, url) {
     if (cfg.pVless) {
       proxies.push('  - name: ' + q(nm + '-vless') + '\n    type: vless\n    server: ' + n.ip + '\n    port: ' + n.port
         + '\n    uuid: ' + cfg.uuid + '\n    tls: ' + (n.tls ? 'true' : 'false')
-        + '\n    servername: ' + host + '\n    client-fingerprint: chrome\n    network: ws'
+        + '\n    servername: ' + host + '\n    client-fingerprint: chrome\n    udp: true\n    network: ws'
         + '\n    ws-opts:\n      path: /' + key + '?ed=2048\n      headers:\n        Host: ' + host);
     }
     if (cfg.pTrojan) {
       proxies.push('  - name: ' + q(nm + '-trojan') + '\n    type: trojan\n    server: ' + n.ip + '\n    port: ' + n.port
         + '\n    password: ' + cfg.uuid + '\n    sni: ' + host
-        + '\n    client-fingerprint: chrome\n    network: ws'
+        + '\n    client-fingerprint: chrome\n    udp: true\n    network: ws'
         + '\n    ws-opts:\n      path: /' + key + '\n      headers:\n        Host: ' + host);
     }
   }
@@ -1208,6 +1208,7 @@ function subClash(cfg, url) {
 
     const fullRules = [
       'rules:',
+      '  - AND,((NETWORK,udp),(DST-PORT,443)),REJECT',
       '  - DOMAIN-SUFFIX,local,🎯 全球直连',
       '  - DOMAIN-SUFFIX,googleapis.cn,🌐 谷歌服务',
       '  - DOMAIN-SUFFIX,gstatic.com,🌐 谷歌服务',
@@ -1245,7 +1246,6 @@ function subClash(cfg, url) {
       '  - RULE-SET,google,🌐 谷歌服务',
       '  - RULE-SET,proxy,🚀 节点选择',
       '  - RULE-SET,gfw,🚀 节点选择',
-      '  - RULE-SET,greatfire,🚀 节点选择',
       '  - RULE-SET,tld-not-cn,🚀 节点选择',
       '  - RULE-SET,direct,🎯 全球直连',
       '  - RULE-SET,lancidr,🎯 全球直连,no-resolve',
@@ -1262,6 +1262,15 @@ function subClash(cfg, url) {
       + '  ipv6: false\n'
       + '  enhanced-mode: fake-ip\n'
       + '  fake-ip-range: 198.18.0.1/16\n'
+      + '  fake-ip-filter:\n'
+      + '    - "*.lan"\n'
+      + '    - "*.local"\n'
+      + '    - "*.msftncsi.com"\n'
+      + '    - "*.msftconnecttest.com"\n'
+      + '    - "connectivitycheck.gstatic.com"\n'
+      + '    - "connectivitycheck.android.com"\n'
+      + '    - "time.*.com"\n'
+      + '    - "pool.ntp.org"\n'
       + '  nameserver:\n'
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
@@ -1287,6 +1296,15 @@ function subClash(cfg, url) {
       + '  ipv6: false\n'
       + '  enhanced-mode: fake-ip\n'
       + '  fake-ip-range: 198.18.0.1/16\n'
+      + '  fake-ip-filter:\n'
+      + '    - "*.lan"\n'
+      + '    - "*.local"\n'
+      + '    - "*.msftncsi.com"\n'
+      + '    - "*.msftconnecttest.com"\n'
+      + '    - "connectivitycheck.gstatic.com"\n'
+      + '    - "connectivitycheck.android.com"\n'
+      + '    - "time.*.com"\n'
+      + '    - "pool.ntp.org"\n'
       + '  nameserver:\n'
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
@@ -1309,6 +1327,7 @@ function subClash(cfg, url) {
       + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]\n'
       + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
       + 'rules:\n'
+      + '  - AND,((NETWORK,udp),(DST-PORT,443)),REJECT\n'
       + '  - DOMAIN-SUFFIX,local,🎯 全球直连\n'
       + '  - IP-CIDR,192.168.0.0/16,🎯 全球直连,no-resolve\n'
       + '  - IP-CIDR,10.0.0.0/8,🎯 全球直连,no-resolve\n'
@@ -1382,7 +1401,6 @@ function subSingbox(cfg, url) {
       auto_route: true,
       strict_route: true,
       stack: 'mixed',
-      sniff: true,
     }
   ];
 
