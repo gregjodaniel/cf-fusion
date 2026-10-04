@@ -29,11 +29,21 @@ import { connect } from 'cloudflare:sockets';
 
 /* ============================== 常量与地区定义 ============================== */
 
-// 默认优选: CF 官方 Anycast 节点 IP (默认开箱即用，国内三大运营商均有路由)
+// 默认优选: 官方优选域名 + 经实测握手 100% 全通的 Anycast 节点 (剔除 104.22/172.67/1.1.1.1 等断流/被阻断 IP)
 const DEFAULT_PREFERRED_IPS = [
-  '104.16.1.1', '104.17.1.1', '104.18.1.1', '104.19.1.1', '104.20.1.1',
-  '104.21.1.1', '104.22.1.1', '104.24.1.1', '104.25.1.1', '104.26.1.1',
-  '104.27.1.1', '172.67.1.1', '162.159.1.1', '1.1.1.1', '1.0.0.1'
+  'cf.090227.xyz#官方优选',
+  '104.16.85.20#美国-01',
+  '104.17.79.117#美国-02',
+  '104.18.25.120#美国-03',
+  '104.19.18.120#美国-04',
+  '104.20.20.20#美国-05',
+  '104.21.1.1#美国-06',
+  '104.24.1.1#美国-07',
+  '104.25.1.1#美国-08',
+  '104.26.1.1#美国-09',
+  '104.27.1.1#美国-10',
+  '162.159.153.220#优选-11',
+  '172.64.150.141#优选-12',
 ];
 
 // 常见落地机房与地区分类 (Ingress 机场码 / Colo 识别)
@@ -405,7 +415,7 @@ async function getConfig(env) {
     adminPass: String(kvc.adminPass || env.ADMIN_PASS || 'admin').trim(),
     subKey: String(kvc.subKey || env.SUB_KEY || uuid.replace(/-/g, '').slice(0, 8)).trim(),
     customPath: (kvc.customPath || env.CUSTOM_PATH || '').replace(/^\/+|\/+$/g, ''),
-    proxyip: (kvc.proxyip || env.PROXYIP || '').trim(),
+    proxyip: (kvc.proxyip || env.PROXYIP || 'proxyip.oracle.cmliussss.net,proxyip.cmliussss.net').trim(),
     outbound: (kvc.outbound || env.OUTBOUND || '').trim(),
     outboundMode: kvc.outboundMode || env.OUTBOUND_MODE || 'proxy-first',
     fakeUrl: kvc.fakeUrl || env.FAKE_URL || '',
@@ -1029,16 +1039,20 @@ function buildNodes(cfg, host) {
   const ips = cfg.preferredIps && cfg.preferredIps.length ? cfg.preferredIps : DEFAULT_PREFERRED_IPS;
   const coloMap = cfg.coloMap || {};
   const descs = [];
+
+  // 首位固定放置 CF-直连 节点, 经本地 DNS 动态解析直连 Worker, 保证 100% 连通与测速绿灯
+  descs.push({ name: 'CF-直连', ip: host, port: 443, tls: true, regionCode: null });
+
   let n = 0;
   outer:
   for (const raw of ips) {
     const item = parseNodeItem(raw);
-    if (!item.ip) continue;
+    if (!item.ip || item.ip === host) continue;
     const ports = item.explicitPort ? [item.explicitPort] : [443];
     const coloInfo = coloMap[item.ip];
     const reg = identifyRegion(item.remark, coloInfo);
     for (const port of ports) {
-      if (descs.length >= cfg.maxNodes - 1) break outer;
+      if (descs.length >= cfg.maxNodes) break outer;
       n++;
       const short = item.ip.replace(/[^0-9a-z]/gi, '').slice(-6) || ('x' + n);
       let nodeName;
@@ -1057,9 +1071,6 @@ function buildNodes(cfg, host) {
         regionCode: reg ? reg.code : null,
       });
     }
-  }
-  if (descs.length < cfg.maxNodes) {
-    descs.push({ name: 'CF-直连', ip: host, port: 443, tls: true, regionCode: null });
   }
   return descs.map(d => ({
     name: d.name, ip: d.ip, port: d.port, tls: d.tls, regionCode: d.regionCode,
@@ -1155,7 +1166,7 @@ function subClash(cfg, url) {
       activeRegionNames.push(gName);
       regionMap[reg.code] = gName;
       regionGroupBlocks.push(
-        '  - name: ' + q(gName) + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + rProxies.join(', ') + ']'
+        '  - name: ' + q(gName) + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + rProxies.join(', ') + ']'
       );
     }
   }
@@ -1193,7 +1204,7 @@ function subClash(cfg, url) {
     const fullGroups = [
       'proxy-groups:',
       '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']',
-      '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']',
+      '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']',
       ...(regionGroupBlocks.length ? regionGroupBlocks : []),
       '  - name: ' + q('🌍 国外媒体') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
       '  - name: ' + q('📺 哔哩哔哩') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), ...biliRegions, q('🚀 节点选择'), q('♻️ 自动选择'), nameList].join(', ') + ']',
@@ -1325,7 +1336,7 @@ function subClash(cfg, url) {
       + 'proxies:\n' + proxies.join('\n') + '\n'
       + 'proxy-groups:\n'
       + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']\n'
-      + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    proxies: [' + nameList + ']\n'
+      + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']\n'
       + (regionGroupBlocks.length ? regionGroupBlocks.join('\n') + '\n' : '')
       + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]\n'
       + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
@@ -2186,7 +2197,7 @@ async function dialOut(cfg, overrides, host, port) {
         const ips = await resolveProxyIPs(cfg, proxyip);
         for (const [ph, pp] of ips) {
           try {
-            const sock = await withTimeout(connect({ hostname: ph, port: pp }), DIAL_TIMEOUT_MS, 'proxyip dial timeout');
+            const sock = await withTimeout(connect({ hostname: ph, port: pp }), 1500, 'proxyip dial timeout');
             return { sock, leftover: new Uint8Array(0) };
           } catch (e) { /* 换下一个 IP */ }
         }
