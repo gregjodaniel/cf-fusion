@@ -32,18 +32,16 @@ import { connect } from 'cloudflare:sockets';
 // 默认优选: 官方优选域名 + 经实测握手 100% 全通的 Anycast 节点 (剔除 104.22/172.67/1.1.1.1 等断流/被阻断 IP)
 const DEFAULT_PREFERRED_IPS = [
   'cf.090227.xyz#官方优选',
+  'icook.tw:2053#台湾-优选',
+  'singapore.com:443#新加坡-优选',
+  'japan.com:443#日本-优选',
   '104.16.85.20#美国-01',
   '104.17.79.117#美国-02',
   '104.18.25.120#美国-03',
   '104.19.18.120#美国-04',
   '104.20.20.20#美国-05',
-  '104.21.1.1#美国-06',
-  '104.24.1.1#美国-07',
-  '104.25.1.1#美国-08',
-  '104.26.1.1#美国-09',
-  '104.27.1.1#美国-10',
-  '162.159.153.220#优选-11',
-  '172.64.150.141#优选-12',
+  '162.159.153.220#优选-06',
+  '172.64.150.141#优选-07',
 ];
 
 // 常见落地机房与地区分类 (Ingress 机场码 / Colo 识别)
@@ -90,11 +88,13 @@ function isSpeedTestHost(host) {
          h === 'www.gstatic.com' ||
          h === 'connectivitycheck.gstatic.com' ||
          h === 'connectivitycheck.android.com' ||
+         h === 'clients3.google.com' ||
          h === 'msftconnecttest.com' ||
          h === 'msftncsi.com' ||
          h.endsWith('.gstatic.com') ||
          h.endsWith('.msftconnecttest.com') ||
          h.endsWith('.msftncsi.com') ||
+         (h.endsWith('.cloudflare.com') && (h.startsWith('cp.') || h.startsWith('speed.'))) ||
          h.includes('generate_204');
 }
 
@@ -1220,7 +1220,7 @@ function subClash(cfg, url) {
     const fullGroups = [
       'proxy-groups:',
       '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']',
-      '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']',
+      '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://cp.cloudflare.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']',
       ...(regionGroupBlocks.length ? regionGroupBlocks : []),
       '  - name: ' + q('🌍 国外媒体') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
       '  - name: ' + q('📺 哔哩哔哩') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), ...biliRegions, q('🚀 节点选择'), q('♻️ 自动选择'), nameList].join(', ') + ']',
@@ -1356,7 +1356,7 @@ function subClash(cfg, url) {
       + 'proxies:\n' + proxies.join('\n') + '\n'
       + 'proxy-groups:\n'
       + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']\n'
-      + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']\n'
+      + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://cp.cloudflare.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']\n'
       + (regionGroupBlocks.length ? regionGroupBlocks.join('\n') + '\n' : '')
       + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]\n'
       + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
@@ -1421,7 +1421,7 @@ function subSingbox(cfg, url) {
         type: 'urltest',
         tag: gTag,
         outbounds: rTags,
-        url: 'http://www.gstatic.com/generate_204',
+        url: 'http://cp.cloudflare.com/generate_204',
         interval: '5m'
       });
     }
@@ -1458,7 +1458,7 @@ function subSingbox(cfg, url) {
 
     const fullOutbounds = [
       { type: 'selector', tag: '🚀 节点选择', outbounds: ['♻️ 自动选择', ...activeRegionTags, ...tags, 'direct'], default: '♻️ 自动选择' },
-      { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
+      { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://cp.cloudflare.com/generate_204', interval: '5m' },
       ...regionOutbounds,
       { type: 'selector', tag: '🌍 国外媒体', outbounds: ['🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', 'direct', ...tags] },
       { type: 'selector', tag: '📲 电报信息', outbounds: ['🚀 节点选择', ...activeRegionTags, '♻️ 自动选择', 'direct', ...tags] },
@@ -1541,7 +1541,7 @@ function subSingbox(cfg, url) {
   } else {
     outbounds.push(
       { type: 'selector', tag: '🚀 节点选择', outbounds: [tags[0] || 'direct', '♻️ 自动选择', ...activeRegionTags, ...tags.slice(1), 'direct'], default: tags[0] || 'direct' },
-      { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://www.gstatic.com/generate_204', interval: '5m' },
+      { type: 'urltest', tag: '♻️ 自动选择', outbounds: tags, url: 'http://cp.cloudflare.com/generate_204', interval: '5m' },
       ...regionOutbounds,
       { type: 'direct', tag: 'direct' },
       { type: 'block', tag: 'block' },
@@ -1889,26 +1889,14 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs, earlyData) {
     return;
   }
 
-  // 本地 204 极速测速响应 (支持 cp.cloudflare.com, gstatic.com, /generate_204 等一切客户端节点延迟检测)
-  // 彻底避免跨洋 TCP 建连延迟、Google 204 超时、ProxyIP 阻塞导致的节点 Timeout 假死
-  if (isSpeedTestHost(sess.host) || sess.port === 80 || sess.port === 8080) {
-    const checkBuf = await reader.readAtLeast(4, 800);
-    const checkStr = checkBuf && checkBuf.length ? td.decode(checkBuf.slice(0, 256)) : '';
-    if (isSpeedTestHost(sess.host) || checkStr.includes('generate_204') || checkStr.startsWith('GET ') || checkStr.startsWith('HEAD ')) {
-      const resp204 = te.encode(
-        'HTTP/1.1 204 No Content\r\n' +
-        'Connection: close\r\n' +
-        'Content-Length: 0\r\n' +
-        'Date: ' + new Date().toUTCString() + '\r\n\r\n'
-      );
-      if (sess.responsePrefix && sess.responsePrefix.length) {
-        ws.send(concatBytes(sess.responsePrefix, resp204));
-      } else {
-        ws.send(resp204);
-      }
-      setTimeout(() => { try { ws.close(); } catch {} }, 100);
-      return;
-    }
+  // 本地 204 极速测速响应 (支持 cp.cloudflare.com, gstatic.com, generate_204 等一切客户端延迟检测)
+  // 核心特性 (学习自 cmliu/edgetunnel 架构):
+  // 1. 边缘节点就近直接回包 HTTP 204 No Content, 无需跨洋建立远端 TCP 拨号, 彻底杜绝并发超限与超时
+  // 2. 严禁主动关闭 WebSocket, 保持连接活跃供客户端优雅完成测速 (支持 HTTP Keep-Alive)
+  // 3. 严格限定目标为测速域名, 严禁拦截正常的非测速 HTTP 端口 (避免破坏客户端网络探测等正常流量)
+  if (isSpeedTestHost(sess.host)) {
+    await handleSpeedTest(ws, reader, sess);
+    return;
   }
 
   let dial;
@@ -1930,6 +1918,63 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs, earlyData) {
   reader.setForward(async (d) => { await writer.write(d); });
   // 关键修复: 将 2 字节 VLESS 头 (或响应前缀) 与远端返回的首包数据合并发送, 严禁提前独立发送空头
   await pumpSocketToWS(sock, ws, sess.responsePrefix, dial.leftover);
+}
+
+/* ---- 本地 204 测速响应处理器 (持续监听测速请求，支持 Keep-Alive，不主动断开连接) ---- */
+async function handleSpeedTest(ws, reader, sess) {
+  let headerToSend = sess.responsePrefix && sess.responsePrefix.length ? sess.responsePrefix : null;
+  const resp204 = te.encode(
+    'HTTP/1.1 204 No Content\r\n' +
+    'Content-Length: 0\r\n' +
+    'Connection: keep-alive\r\n' +
+    'Date: ' + new Date().toUTCString() + '\r\n\r\n'
+  );
+
+  function send204() {
+    if (ws.readyState !== 1) return;
+    if (headerToSend) {
+      ws.send(concatBytes(headerToSend, resp204));
+      headerToSend = null;
+    } else {
+      ws.send(resp204);
+    }
+  }
+
+  let requestBuf = new Uint8Array(0);
+  let responded = false;
+
+  function processChunk(chunk) {
+    if (!chunk || !chunk.length) return;
+    requestBuf = concatBytes(requestBuf, chunk);
+    while (requestBuf.length) {
+      let headerEnd = -1;
+      for (let i = 0; i <= requestBuf.length - 4; i++) {
+        if (requestBuf[i] === 13 && requestBuf[i + 1] === 10 && requestBuf[i + 2] === 13 && requestBuf[i + 3] === 10) {
+          headerEnd = i + 4;
+          break;
+        }
+      }
+      if (headerEnd === -1) break;
+      const headStr = td.decode(requestBuf.subarray(0, headerEnd));
+      const clm = headStr.match(/(?:^|\r\n)content-length\s*:\s*(\d+)/i);
+      const cl = clm ? parseInt(clm[1], 10) : 0;
+      const reqLen = headerEnd + cl;
+      if (requestBuf.length < reqLen) break;
+      requestBuf = requestBuf.slice(reqLen);
+      responded = true;
+      send204();
+    }
+  }
+
+  reader.setForward(processChunk);
+
+  // 兜底保障: 若客户端发包微小延迟或仅握手即断开探测，300ms 内立即直接应答 204
+  setTimeout(() => {
+    if (!responded && ws.readyState === 1) {
+      responded = true;
+      send204();
+    }
+  }, 300);
 }
 
 /* ---- DNS over HTTPS: 代理 UDP 53 端口查询 ---- */
