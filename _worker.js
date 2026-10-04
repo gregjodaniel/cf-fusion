@@ -1182,7 +1182,7 @@ function subClash(cfg, url) {
       activeRegionNames.push(gName);
       regionMap[reg.code] = gName;
       regionGroupBlocks.push(
-        '  - name: ' + q(gName) + '\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + rProxies.join(', ') + ']'
+        '  - name: ' + q(gName) + '\n    type: url-test\n    url: http://cp.cloudflare.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + rProxies.join(', ') + ']'
       );
     }
   }
@@ -2136,9 +2136,9 @@ function parseVlessHeader(buf, cfg) {
     headerLen = 26 + m;
   } else if (atyp === 2) {
     const len = buf[22 + m];
-    if (buf.length < 24 + m + len) return 'need-more';
+    if (buf.length < 23 + m + len) return 'need-more';
     try { host = td.decode(buf.slice(23 + m, 23 + m + len)); } catch { return null; }
-    headerLen = 24 + m + len;
+    headerLen = 23 + m + len;
   } else if (atyp === 3) {
     if (buf.length < 38 + m) return 'need-more';
     const parts = [];
