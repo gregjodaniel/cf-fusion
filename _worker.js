@@ -1028,7 +1028,7 @@ function buildNodes(cfg, host) {
   const path = '/' + key;
   const ips = cfg.preferredIps && cfg.preferredIps.length ? cfg.preferredIps : DEFAULT_PREFERRED_IPS;
   const coloMap = cfg.coloMap || {};
-  const descs = [{ name: 'CF-直连', ip: host, port: 443, tls: true, regionCode: null }];
+  const descs = [];
   let n = 0;
   outer:
   for (const raw of ips) {
@@ -1038,7 +1038,7 @@ function buildNodes(cfg, host) {
     const coloInfo = coloMap[item.ip];
     const reg = identifyRegion(item.remark, coloInfo);
     for (const port of ports) {
-      if (descs.length >= cfg.maxNodes) break outer;
+      if (descs.length >= cfg.maxNodes - 1) break outer;
       n++;
       const short = item.ip.replace(/[^0-9a-z]/gi, '').slice(-6) || ('x' + n);
       let nodeName;
@@ -1057,6 +1057,9 @@ function buildNodes(cfg, host) {
         regionCode: reg ? reg.code : null,
       });
     }
+  }
+  if (descs.length < cfg.maxNodes) {
+    descs.push({ name: 'CF-直连', ip: host, port: 443, tls: true, regionCode: null });
   }
   return descs.map(d => ({
     name: d.name, ip: d.ip, port: d.port, tls: d.tls, regionCode: d.regionCode,
@@ -1275,8 +1278,8 @@ function subClash(cfg, url) {
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
       + '  fallback:\n'
-      + '    - https://1.1.1.1/dns-query\n'
       + '    - https://8.8.8.8/dns-query\n'
+      + '    - https://9.9.9.9/dns-query\n'
       + '  fallback-filter:\n'
       + '    geoip: true\n'
       + '    geoip-code: CN\n';
@@ -1309,8 +1312,8 @@ function subClash(cfg, url) {
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
       + '  fallback:\n'
-      + '    - https://1.1.1.1/dns-query\n'
       + '    - https://8.8.8.8/dns-query\n'
+      + '    - https://9.9.9.9/dns-query\n'
       + '  fallback-filter:\n'
       + '    geoip: true\n'
       + '    geoip-code: CN\n';
@@ -1472,8 +1475,8 @@ function subSingbox(cfg, url) {
 
     const singboxDNS = {
       servers: [
-        { tag: 'dns-remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
-        { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'dns-remote', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'dns-remote-backup', type: 'https', server: '9.9.9.9', detour: '🚀 节点选择' },
         { tag: 'dns-direct', type: 'udp', server: '223.5.5.5' },
         { tag: 'dns-local', type: 'local' },
       ],
@@ -1516,8 +1519,8 @@ function subSingbox(cfg, url) {
     const miniSrsIp = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
     const singboxDNS = {
       servers: [
-        { tag: 'dns-remote', type: 'https', server: '1.1.1.1', detour: '🚀 节点选择' },
-        { tag: 'dns-remote-backup', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'dns-remote', type: 'https', server: '8.8.8.8', detour: '🚀 节点选择' },
+        { tag: 'dns-remote-backup', type: 'https', server: '9.9.9.9', detour: '🚀 节点选择' },
         { tag: 'dns-direct', type: 'udp', server: '223.5.5.5' },
         { tag: 'dns-local', type: 'local' },
       ],
@@ -2111,7 +2114,8 @@ const CF_IPV4_RANGES = [
   '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
   '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
   '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
-  '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'
+  '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+  '1.1.1.0/24', '1.0.0.0/24', '162.159.0.0/16'
 ];
 function _ipv4ToInt(ip) {
   const p = ip.split('.');
