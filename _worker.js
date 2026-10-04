@@ -1122,6 +1122,17 @@ function buildNodes(cfg, host) {
   // 首位固定放置 CF-直连 节点, 经本地 DNS 动态解析直连 Worker, 保证 100% 连通与测速绿灯
   descs.push({ name: 'CF-直连', ip: host, port: 443, tls: true, regionCode: null });
 
+  // 统计各 remark 频次, 对同名节点进行自增编号(如 移动-01-443), 避免 Clash 等客户端节点名重名
+  const remarkTotal = new Map();
+  for (const raw of ips) {
+    const item = parseNodeItem(raw);
+    if (!item.ip || item.ip === host) continue;
+    if (item.remark) {
+      remarkTotal.set(item.remark, (remarkTotal.get(item.remark) || 0) + 1);
+    }
+  }
+  const remarkSeen = new Map();
+
   let n = 0;
   outer:
   for (const raw of ips) {
@@ -1130,13 +1141,22 @@ function buildNodes(cfg, host) {
     const ports = item.explicitPort ? [item.explicitPort] : [443];
     const coloInfo = coloMap[item.ip];
     const reg = identifyRegion(item.remark, coloInfo);
+    let order = 0;
+    let isDup = false;
+    if (item.remark) {
+      isDup = (remarkTotal.get(item.remark) || 0) > 1;
+      order = (remarkSeen.get(item.remark) || 0) + 1;
+      remarkSeen.set(item.remark, order);
+    }
     for (const port of ports) {
       if (descs.length >= cfg.maxNodes) break outer;
       n++;
       const short = item.ip.replace(/[^0-9a-z]/gi, '').slice(-6) || ('x' + n);
       let nodeName;
       if (item.remark) {
-        nodeName = `${reg ? reg.flag + ' ' : ''}${item.remark}-${port}`;
+        nodeName = isDup
+          ? `${reg ? reg.flag + ' ' : ''}${item.remark}-${String(order).padStart(2, '0')}-${port}`
+          : `${reg ? reg.flag + ' ' : ''}${item.remark}-${port}`;
       } else if (coloInfo && coloInfo.colo) {
         nodeName = `${reg ? reg.flag + ' ' : ''}CF优选-${coloInfo.colo}-${short}-${port}`;
       } else {
@@ -1150,6 +1170,18 @@ function buildNodes(cfg, host) {
         regionCode: reg ? reg.code : null,
       });
     }
+  }
+
+  // 兜底确保所有节点的 name 全局唯一
+  const finalNames = new Set();
+  for (const d of descs) {
+    let name = d.name;
+    let idx = 2;
+    while (finalNames.has(name)) {
+      name = `${d.name}-${idx++}`;
+    }
+    d.name = name;
+    finalNames.add(name);
   }
   return descs.map(d => ({
     name: d.name, ip: d.ip, port: d.port, tls: d.tls, regionCode: d.regionCode,
