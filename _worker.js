@@ -541,104 +541,87 @@ export default {
 
     // 3.5) 出站诊断 (需要 admin 密码)
     if (segs[0] === 'diag' && (url.searchParams.get('key') || '').trim() === cfg.adminPass) {
-      const out = { time: new Date().toISOString(), proxyip: cfg.proxyip || '(empty)', doh: cfg.doh };
-      // a) 直接拨号测试
+      /**
+       * 【架构决策与排障说明：为什么 /diag 不使用自制裸字节探测 TLS】
+       * 
+       * 历史教训：严禁在 Worker 内手工拼装裸二进制 ClientHello 去探测远端 TLS。
+       * 
+       * 原因：
+       * 1. 现代 TLS 1.3 强依赖合规的扩展协商（ALPN, key_share, 现代加密套件与指纹）。
+       *    Worker 内手工拼凑的最小 ClientHello 缺少现代扩展，对端 CDN / 反代（如 Cloudflare / Oracle）
+       *    会直接返回 TLS 告警（Alert，如 15 03 01）拒绝握手，产生严重的假阴性（误报 FAIL），
+       *    极易误导用户认为 ProxyIP 或 TLS 出现故障。
+       * 2. 在真实代理链路上，Worker 仅作为透明 TCP 管道进行字节盲转发（Passthrough），
+       *    真实的完整 ClientHello 由客户端（Chrome / Clash / Sing-box）生成并转发，
+       *    真实代理路径完全不受此类自制裸包测试失败的影响。
+       * 3. 诊断只保留具有真实指导意义的指标：
+       *    - 纯 TCP 握手连通性（direct443 与 proxyipDial）
+       *    - Worker 原生合规堆栈的 HTTPS 出站探测（带超时的 fetch）
+       *    - ProxyIP 动态解析状态
+       *    - KV 存储健康读检查（不执行写操作，零写入配额污染）
+       */
+      const out = {
+        time: new Date().toISOString(),
+        proxyip: cfg.proxyip || '(empty)',
+        doh: cfg.doh,
+        direct443: null,
+        httpsOutbound: null,
+        proxyipResolve: null,
+        proxyipDial: [],
+        kvHealthy: false,
+      };
+
+      // 1) 基础 TCP 拨号能力测试
       try {
         const t0 = Date.now();
-        const s = await withTimeout(connect({ hostname: 'example.com', port: 443 }), 8000, 'timeout');
+        const s = await withTimeout(connect({ hostname: 'cloudflare.com', port: 443 }), 6000, 'timeout');
         s.close();
         out.direct443 = `OK (${Date.now() - t0}ms)`;
       } catch (e) { out.direct443 = `FAIL: ${e.message}`; }
-      // a2) 直连 TLS 握手测试 (SNI=example.com)
+
+      // 2) Worker 原生标准 HTTPS 出站测试 (使用带超时的原生 fetch，自带完整 TLS 栈)
       try {
         const t0 = Date.now();
-        const s = await withTimeout(connect({ hostname: 'example.com', port: 443 }), 8000, 'timeout');
-        const sniB = new TextEncoder().encode('example.com');
-        const ext = new Uint8Array(9 + sniB.length);
-        const ev = new DataView(ext.buffer);
-        ev.setUint16(0, 0x0000); ev.setUint16(2, 5 + sniB.length);
-        ev.setUint16(4, 3 + sniB.length); ext[6] = 0x00;
-        ev.setUint16(7, sniB.length); ext.set(sniB, 9);
-        const helloLen = 2 + 32 + 1 + 2 + 2 + 2 + ext.length;
-        const hello = new Uint8Array(helloLen);
-        const hv = new DataView(hello.buffer);
-        let o2 = 0;
-        hv.setUint16(o2, 0x0303); o2 += 2;
-        crypto.getRandomValues(hello.subarray(o2, o2 + 32)); o2 += 32;
-        hello[o2++] = 0x00;
-        hv.setUint16(o2, 0x002f); o2 += 2;
-        hello[o2++] = 0x01; hello[o2++] = 0x00;
-        hv.setUint16(o2, ext.length); o2 += 2;
-        hello.set(ext, o2);
-        const rec = new Uint8Array(5 + hello.length);
-        rec[0] = 0x16; rec[1] = 0x03; rec[2] = 0x01;
-        new DataView(rec.buffer).setUint16(3, hello.length);
-        rec.set(hello, 5);
-        const w2 = s.writable.getWriter();
-        await w2.write(rec); w2.releaseLock();
-        const r2 = s.readable.getReader();
-        const rd2 = await withTimeout(r2.read(), 8000, 'no response');
-        r2.releaseLock(); s.close();
-        out.directTls = (rd2.value && rd2.value[0] === 0x16) ? `OK (${Date.now() - t0}ms)` : `FAIL: empty`;
-      } catch (e) { out.directTls = `FAIL: ${e.message}`; }
-      // b) ProxyIP 解析测试
-      if (cfg.proxyip) {
-        // b0) SNI 寻路测试: 经 ProxyIP 发 TLS ClientHello, 看能否拿到 ServerHello
-        try {
-          const pipIps = await resolveProxyIPs(cfg, cfg.proxyip);
-          if (pipIps.length) {
-            const [th, tp] = pipIps[0];
-            const t0 = Date.now();
-            const s = await withTimeout(connect({ hostname: th, port: tp }), 8000, 'timeout');
-            // 最小 TLS ClientHello, SNI=example.com
-            const sniB = new TextEncoder().encode('example.com');
-            const extLen = 2 + 2 + 2 + 1 + sniB.length;
-            const ext = new Uint8Array(4 + extLen);
-            const ev = new DataView(ext.buffer);
-            ev.setUint16(0, 0x0000); ev.setUint16(2, extLen - 4);
-            ev.setUint16(4, extLen - 6); ext[6] = 0x00;
-            ev.setUint16(7, sniB.length); ext.set(sniB, 9);
-            const helloLen = 2 + 32 + 1 + 2 + 2 + 2 + ext.length;
-            const hello = new Uint8Array(helloLen);
-            const hv = new DataView(hello.buffer);
-            let o = 0;
-            hv.setUint16(o, 0x0303); o += 2;
-            crypto.getRandomValues(hello.subarray(o, o + 32)); o += 32;
-            hello[o++] = 0x00;
-            hv.setUint16(o, 0x002f); o += 2;
-            hello[o++] = 0x01; hello[o++] = 0x00;
-            hv.setUint16(o, ext.length); o += 2;
-            hello.set(ext, o);
-            const rec = new Uint8Array(5 + hello.length);
-            rec[0] = 0x16; rec[1] = 0x03; rec[2] = 0x01;
-            new DataView(rec.buffer).setUint16(3, hello.length);
-            rec.set(hello, 5);
-            const w = s.writable.getWriter();
-            await w.write(rec); w.releaseLock();
-            const r = s.readable.getReader();
-            const rd = await withTimeout(r.read(), 8000, 'no response');
-            r.releaseLock(); s.close();
-            const bytes = rd.value ? Array.from(rd.value.slice(0, 3)).map(b => b.toString(16).padStart(2, '0')).join(' ') : 'empty';
-            out.sniTest = (rd.value && rd.value[0] === 0x16) ? `OK (${Date.now() - t0}ms): got TLS ServerHello via ${th}` : `FAIL: got [${bytes}] via ${th}`;
-          }
-        } catch (e) { out.sniTest = `FAIL: ${e.message}`; }
+        const resp = await withTimeout(
+          fetch('https://cloudflare.com/cdn-cgi/trace', { signal: AbortSignal.timeout(6000) }),
+          6000,
+          'timeout'
+        );
+        if (resp.ok) {
+          const txt = await resp.text();
+          const colo = txt.match(/colo=([A-Z]+)/)?.[1] || 'UNKNOWN';
+          const ip = txt.match(/ip=([0-9a-fA-F:.]+)/)?.[1] || '';
+          out.httpsOutbound = `OK (${Date.now() - t0}ms, colo=${colo}, egress=${ip})`;
+        } else {
+          out.httpsOutbound = `FAIL: HTTP ${resp.status}`;
+        }
+      } catch (e) { out.httpsOutbound = `FAIL: ${e.message}`; }
 
+      // 3) ProxyIP 解析与逐个 TCP 拨号测试
+      if (cfg.proxyip) {
         try {
           const t0 = Date.now();
           const ips = await resolveProxyIPs(cfg, cfg.proxyip);
           out.proxyipResolve = `OK (${Date.now() - t0}ms): ${ips.map(x => x.join(':')).join(', ')}`;
-          // c) 逐个拨号测试
-          out.proxyipDial = [];
           for (const [ph, pp] of ips.slice(0, 4)) {
             try {
               const t1 = Date.now();
-              const s = await withTimeout(connect({ hostname: ph, port: pp }), 8000, 'timeout');
+              const s = await withTimeout(connect({ hostname: ph, port: pp }), 5000, 'timeout');
               s.close();
               out.proxyipDial.push(`${ph}:${pp} OK (${Date.now() - t1}ms)`);
             } catch (e) { out.proxyipDial.push(`${ph}:${pp} FAIL: ${e.message}`); }
           }
         } catch (e) { out.proxyipResolve = `FAIL: ${e.message}`; }
       }
+
+      // 4) KV 纯读健康检查 (仅读已有配置，零写操作、零配额污染)
+      try {
+        if (env.KV) {
+          const v = await env.KV.get('cfu:config');
+          out.kvHealthy = (v !== undefined); // 能正常读取即说明 KV 绑定健康可用
+        }
+      } catch {}
+
       return new Response(JSON.stringify(out, null, 2), { headers: { 'Content-Type': 'application/json' } });
     }
 
