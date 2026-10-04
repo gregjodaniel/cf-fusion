@@ -766,8 +766,12 @@ function adminPanelHTML() {
   + '<button class="btn ghost" onclick="loadConfig()">重新加载</button>'
   + '<button class="btn danger" onclick="resetConfig()">清空面板配置(回退到环境变量)</button></div>'
   // 优选 IP tab
-  + '<div class="card page hide" id="p-ips"><h3>优选 IP / 域名 (每行一个, 用于生成订阅节点)</h3>'
-  + '<div class="f"><textarea id="ips" placeholder="1.1.1.1"></textarea></div>'
+  + '<div class="card page hide" id="p-ips"><h3>优选 IP / 域名 (用于生成订阅节点)</h3>'
+  + '<div class="f"><label>外部优选 TXT 订阅源 (支持从第三方在线自动同步更新)</label>'
+  + '<div style="display:flex;gap:8px"><input type="text" id="ipsSourceUrl" placeholder="https://bestcf.pages.dev/cfyes/ipv4.txt" style="flex:1">'
+  + '<button class="btn" id="btnSyncIps" onclick="syncIps(this)">立即从订阅源同步</button></div></div>'
+  + '<div class="f" style="margin-top:10px"><label>优选列表预览与编辑 (存入 KV，每行一个)</label>'
+  + '<textarea id="ips" placeholder="1.1.1.1" style="height:220px"></textarea></div>'
   + '<button class="btn" onclick="saveIps()">保存</button>'
   + '<button class="btn ghost" onclick="defaultIps()">恢复默认官方 IP</button></div>'
   // 测速 tab
@@ -839,9 +843,18 @@ function adminPanelHTML() {
   + 'function resetConfig(){if(!confirm("清空面板配置并回退到环境变量?"))return;'
   + 'api("config",{method:"DELETE"}).then(function(){showMsg("已清空, 重新加载中",true);loadConfig();loadIps();});}'
   + 'function loadIps(){api("ips").then(function(d){document.getElementById("ips").value=(d.ips||[]).join("\\n");'
+  + 'if(d.sourceUrl)document.getElementById("ipsSourceUrl").value=d.sourceUrl;'
   + 'document.getElementById("speedHosts").value=(d.ips||[]).slice(0,20).join("\\n");});}'
+  + 'function syncIps(btn){btn=btn||document.getElementById("btnSyncIps");var url=document.getElementById("ipsSourceUrl").value.trim();'
+  + 'if(!url){showMsg("请先输入优选源 URL",false);return;}if(btn){btn.disabled=true;btn.textContent="同步中...";}'
+  + 'api("ips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sync:true,url:url})})'
+  + '.then(function(r){if(btn){btn.disabled=false;btn.textContent="立即从订阅源同步";}'
+  + 'if(r.ok){document.getElementById("ips").value=(r.ips||[]).join("\\n");document.getElementById("speedHosts").value=(r.ips||[]).slice(0,20).join("\\n");showMsg("✓ 成功同步 "+r.count+" 个优选节点并存入 KV",true);}'
+  + 'else showMsg(r.error||"同步失败",false);}).catch(function(e){if(btn){btn.disabled=false;btn.textContent="立即从订阅源同步";}'
+  + 'showMsg(e.message,false);});}'
   + 'function saveIps(){var ips=document.getElementById("ips").value.split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
-  + 'api("ips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ips:ips})})'
+  + 'var sourceUrl=document.getElementById("ipsSourceUrl").value.trim();'
+  + 'api("ips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ips:ips,sourceUrl:sourceUrl})})'
   + '.then(function(){showMsg("优选 IP 已保存",true);}).catch(function(e){showMsg(e.message,false);});}'
   + 'function defaultIps(){api("ips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reset:true})})'
   + '.then(function(d){document.getElementById("ips").value=(d.ips||[]).join("\\n");showMsg("已恢复默认",true);});}'
@@ -863,6 +876,35 @@ function adminPanelHTML() {
   + 'if(pw){api("auth",{method:"POST"}).then(function(){document.getElementById("login").style.display="none";init();}).catch(function(){document.getElementById("login").style.display="flex";});}'
   + 'else{document.getElementById("login").style.display="flex";}'
   + '</script></body></html>';
+}
+
+/* ---- 解析外部 TXT 优选源 (过滤首尾广告/公告声明，支持 IP:PORT#REMARK 和纯 IP 格式) ---- */
+function parsePreferredIpsTxt(txt) {
+  const lines = (txt || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const result = [];
+  for (const line of lines) {
+    if (/bestcf|分享|免费|入[口站]|公告|更新|▼|▲/i.test(line)) continue;
+    const hashIdx = line.indexOf('#');
+    const addr = hashIdx >= 0 ? line.slice(0, hashIdx).trim() : line;
+    let remark = hashIdx >= 0 ? line.slice(hashIdx + 1).trim() : '';
+    const colonIdx = addr.lastIndexOf(':');
+    const ip = colonIdx >= 0 ? addr.slice(0, colonIdx).trim() : addr;
+    const port = colonIdx >= 0 ? parseInt(addr.slice(colonIdx + 1).trim(), 10) : 443;
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) continue;
+    if (isNaN(port) || port < 1 || port > 65535) continue;
+    if (/^(162\.159\.19[78]\.1)$/.test(ip)) continue;
+
+    if (remark) {
+      let cleanRemark = remark
+        .replace(/CFYes优选\s*\|\s*/gi, '')
+        .replace(/\s*\|\s*[\d\.]+$/g, '')
+        .replace(/^.*\|\s*/, '')
+        .trim();
+      remark = cleanRemark || remark;
+    }
+    result.push(`${ip}:${port}${remark ? '#' + remark : ''}`);
+  }
+  return result;
 }
 
 /* ============================== 管理 API ============================== */
@@ -912,11 +954,48 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
 
   // 优选 IP 管理
   if (action === 'ips') {
-    if (request.method === 'GET') return json({ ips: cfg.preferredIps });
+    if (request.method === 'GET') {
+      const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
+      return json({
+        ips: cfg.preferredIps,
+        sourceUrl: kvc.preferredIpsSourceUrl || 'https://bestcf.pages.dev/cfyes/ipv4.txt'
+      });
+    }
     if (request.method === 'POST') {
       let body;
       try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
       const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
+
+      // 同步外部 TXT 优选源 (带降级容灾：抓取失败不破坏现有 KV 缓存)
+      if (body.sync) {
+        const sourceUrl = (body.url || kvc.preferredIpsSourceUrl || 'https://bestcf.pages.dev/cfyes/ipv4.txt').trim();
+        try {
+          const resp = await withTimeout(
+            fetch(sourceUrl, { signal: AbortSignal.timeout(6000) }),
+            6000,
+            'fetch timeout'
+          );
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const txt = await resp.text();
+          const parsed = parsePreferredIpsTxt(txt);
+          if (!parsed.length) throw new Error('从该订阅源中未解析出合法的优选 IP');
+          
+          kvc.preferredIps = parsed;
+          kvc.preferredIpsSourceUrl = sourceUrl;
+          await kvPut(env, 'cfu:config', JSON.stringify(kvc));
+          clearConfigCache();
+          return json({ ok: true, ips: parsed, sourceUrl, count: parsed.length });
+        } catch (e) {
+          // 降级容灾链：外部源抓取失败时，保留现有 KV 优选数据，确保订阅绝对不受影响
+          return json({
+            ok: false,
+            error: `同步失败: ${e.message}（已保留现有 KV 优选数据，订阅不受影响）`,
+            ips: cfg.preferredIps,
+            sourceUrl
+          }, 502);
+        }
+      }
+
       let ips;
       if (body.reset) ips = DEFAULT_PREFERRED_IPS.slice();
       else {
@@ -924,9 +1003,10 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
         if (!ips.length) return json({ error: '列表不能为空' }, 400);
       }
       kvc.preferredIps = ips;
+      if (body.sourceUrl) kvc.preferredIpsSourceUrl = body.sourceUrl.trim();
       await kvPut(env, 'cfu:config', JSON.stringify(kvc));
       clearConfigCache();
-      return json({ ok: true, ips });
+      return json({ ok: true, ips, sourceUrl: kvc.preferredIpsSourceUrl });
     }
   }
 
