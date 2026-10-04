@@ -856,7 +856,7 @@ function adminPanelHTML() {
   + 'function resetConfig(){if(!confirm("清空面板配置并回退到环境变量?"))return;'
   + 'api("config",{method:"DELETE"}).then(function(){showMsg("已清空, 重新加载中",true);loadConfig();loadIps();});}'
   + 'function loadIps(){api("ips").then(function(d){document.getElementById("ips").value=(d.ips||[]).join("\\n");'
-  + 'document.getElementById("speedHosts").value=(d.ips||[]).slice(0,20).map(function(ip){return ip+":443"}).join("\\n");});}'
+  + 'document.getElementById("speedHosts").value=(d.ips||[]).slice(0,20).join("\\n");});}'
   + 'function saveIps(){var ips=document.getElementById("ips").value.split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
   + 'api("ips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ips:ips})})'
   + '.then(function(){showMsg("优选 IP 已保存",true);}).catch(function(e){showMsg(e.message,false);});}'
