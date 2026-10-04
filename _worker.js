@@ -1889,18 +1889,53 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs, earlyData) {
     ws.close(1011, 'dial failed');
     return;
   }
-  const sock = dial.sock;
+  let sock = dial.sock;
   logConn(env, cfg, sess.proto, sess.host + ':' + sess.port);
-  const closeSock = () => { try { sock.close(); } catch {} };
+  let closeSock = () => { try { sock.close(); } catch {} };
   ws.addEventListener('close', closeSock);
   ws.addEventListener('error', closeSock);
 
-  const writer = sock.writable.getWriter();
-  ws.addEventListener('close', () => { try { writer.releaseLock(); } catch {} });
-  // 切换为直通模式: 已缓冲的(去掉协议头后)数据先发, 后续消息实时转发
-  reader.setForward(async (d) => { await writer.write(d); });
+  let activeWriter = sock.writable.getWriter();
+  ws.addEventListener('close', () => { try { activeWriter?.releaseLock(); } catch {} });
+
+  // 备份客户端首包 (TLS ClientHello 等)，用于直连静默超时后的 ProxyIP 重试重发
+  let initialPayload = reader.getRemainingBuf();
+  initialPayload = initialPayload && initialPayload.length ? new Uint8Array(initialPayload) : null;
+
+  reader.setForward(async (d) => {
+    if (!initialPayload && d && d.length) initialPayload = new Uint8Array(d);
+    if (activeWriter) await activeWriter.write(d);
+  });
+
+  // 直连成功但指定时间内零回包（或异常挂死）时的 ProxyIP 兜底重试函数
+  let onZeroRetry = null;
+  const proxyip = (overrides.proxyip || cfg.proxyip || '').trim();
+  if (!dial.viaProxyIP && proxyip) {
+    onZeroRetry = async () => {
+      try {
+        const pDial = await dialProxyIP(cfg, proxyip, sess.host, sess.port);
+        const newSock = pDial.sock;
+        const newWriter = newSock.writable.getWriter();
+        ws.removeEventListener('close', closeSock);
+        ws.removeEventListener('error', closeSock);
+        closeSock = () => { try { newSock.close(); } catch {} };
+        ws.addEventListener('close', closeSock);
+        ws.addEventListener('error', closeSock);
+
+        // 重发备份的客户端首包 (TLS ClientHello)
+        if (initialPayload && initialPayload.length) {
+          await newWriter.write(initialPayload);
+        }
+        activeWriter = newWriter;
+        return newSock;
+      } catch {
+        return null;
+      }
+    };
+  }
+
   // 关键修复: 将 2 字节 VLESS 头 (或响应前缀) 与远端返回的首包数据合并发送, 严禁提前独立发送空头
-  await pumpSocketToWS(sock, ws, sess.responsePrefix, dial.leftover);
+  await pumpSocketToWS(sock, ws, sess.responsePrefix, dial.leftover, onZeroRetry);
 }
 
 /* ---- 本地 204 测速响应处理器 (持续监听测速请求，支持 Keep-Alive，不主动断开连接) ---- */
@@ -2002,9 +2037,12 @@ async function handleDnsUdp(ws, reader, sess, cfg) {
   });
 }
 
-/* ---- 远端 Socket 数据流推送到 WebSocket (严格保证协议响应头与首包合并) ---- */
-async function pumpSocketToWS(sock, ws, responsePrefix, leftover) {
+/* ---- 远端 Socket 数据流推送到 WebSocket (严格保证协议响应头与首包合并，支持零回包重试) ---- */
+async function pumpSocketToWS(sock, ws, responsePrefix, leftover, onZeroRetry) {
   let headerToSend = responsePrefix && responsePrefix.length ? responsePrefix : null;
+  let currentSock = sock;
+  let hasIncomingData = false;
+
   try {
     if (leftover && leftover.length) {
       if (headerToSend) {
@@ -2013,13 +2051,50 @@ async function pumpSocketToWS(sock, ws, responsePrefix, leftover) {
       } else {
         ws.send(leftover);
       }
+      hasIncomingData = true;
     }
-    const r = sock.readable.getReader();
+
+    let r = currentSock.readable.getReader();
     try {
+      let firstRead = null;
+      if (!hasIncomingData && onZeroRetry) {
+        try {
+          firstRead = await withTimeout(r.read(), 1800, 'first-read-timeout');
+        } catch {
+          firstRead = null;
+        }
+      }
+
+      // 若直连首包零回包（或对端静默黑洞超时 1800ms），触发重试切到 ProxyIP
+      if (!hasIncomingData && onZeroRetry && (!firstRead || firstRead.done)) {
+        try { r.releaseLock(); } catch {}
+        try { currentSock.close(); } catch {}
+        const newSock = await onZeroRetry();
+        if (newSock) {
+          currentSock = newSock;
+          r = currentSock.readable.getReader();
+        } else {
+          return;
+        }
+      }
+
+      if (firstRead && !firstRead.done && firstRead.value && firstRead.value.length) {
+        hasIncomingData = true;
+        if (ws.readyState === 1) {
+          if (headerToSend) {
+            ws.send(concatBytes(headerToSend, firstRead.value));
+            headerToSend = null;
+          } else {
+            ws.send(firstRead.value);
+          }
+        }
+      }
+
       for (;;) {
         const { done, value } = await r.read();
         if (done) break;
         if (ws.readyState !== 1) break;
+        hasIncomingData = true;
         if (headerToSend) {
           ws.send(concatBytes(headerToSend, value));
           headerToSend = null;
@@ -2027,10 +2102,12 @@ async function pumpSocketToWS(sock, ws, responsePrefix, leftover) {
           ws.send(value);
         }
       }
-    } finally { r.releaseLock(); }
+    } finally {
+      try { r.releaseLock(); } catch {}
+    }
   } catch {} finally {
     try { ws.close(); } catch {}
-    try { sock.close(); } catch {}
+    try { currentSock.close(); } catch {}
   }
 }
 
@@ -2072,12 +2149,13 @@ function makeWSReader(ws, earlyData) {
     }
   }
   function consume(n) { buf = buf.slice(n); }
+  function getRemainingBuf() { return buf; }
   function setForward(fn) {
     forward = (d) => { Promise.resolve(fn(d)).catch(() => { try { ws.close(); } catch {} }); };
     if (buf.length) { const b = buf; buf = new Uint8Array(0); forward(b); }
     while (queue.length) forward(queue.shift());
   }
-  return { readAtLeast, consume, setForward };
+  return { readAtLeast, consume, getRemainingBuf, setForward };
 }
 
 /* ============================== 协议解析 ============================== */
@@ -2218,13 +2296,25 @@ function isCloudflareIP(ip) {
   }
   return false;
 }
+async function dialProxyIP(cfg, proxyip, host, port) {
+  if (!proxyip) throw new Error('no proxyip configured');
+  const ips = await resolveProxyIPs(cfg, proxyip);
+  for (const [ph, pp] of ips) {
+    try {
+      const sock = await withTimeout(connect({ hostname: ph, port: pp }), 2500, 'proxyip dial timeout');
+      return { sock, leftover: new Uint8Array(0), viaProxyIP: true };
+    } catch (e) { /* 换下一个 IP */ }
+  }
+  throw new Error('all proxyips failed');
+}
+
 async function dialOut(cfg, overrides, host, port) {
   const outboundStr = (overrides.outbound || cfg.outbound || '').trim();
   const mode = cfg.outboundMode || 'proxy-first';
   const proxyip = (overrides.proxyip || cfg.proxyip || '').trim();
   const direct = async () => {
     const sock = await withTimeout(connect({ hostname: host, port }), DIAL_TIMEOUT_MS, 'dial timeout');
-    return { sock, leftover: new Uint8Array(0) };
+    return { sock, leftover: new Uint8Array(0), viaProxyIP: false };
   };
   // SOCKS5/HTTP 出站代理
   if (outboundStr) {
@@ -2233,9 +2323,12 @@ async function dialOut(cfg, overrides, host, port) {
       if (!p) throw new Error('bad outbound proxy');
       if (p.scheme === 'socks5') {
         const sock = await connectViaSocks5(p, host, port);
-        return { sock, leftover: new Uint8Array(0) };
+        return { sock, leftover: new Uint8Array(0), viaProxyIP: false };
       }
-      if (p.scheme === 'http') return connectViaHttp(p, host, port);
+      if (p.scheme === 'http') {
+        const res = await connectViaHttp(p, host, port);
+        return { ...res, viaProxyIP: false };
+      }
       throw new Error('unsupported proxy scheme (仅支持 socks5/http)');
     };
     if (mode === 'proxy-only') return viaProxy();
@@ -2244,38 +2337,21 @@ async function dialOut(cfg, overrides, host, port) {
     }
     try { return await viaProxy(); } catch { return direct(); } // proxy-first
   }
-  // ProxyIP: 仅当目标为 Cloudflare IP 段时使用
-  // 原理: CF 官方限制 Worker 不能直连 CF 自有 IP 段 (TCP sockets to CF ranges blocked),
-  // 需经第三方 ProxyIP 跳板: Worker -> ProxyIP(非CF) -> CF目标。
-  // 跳板机从客户端 TLS ClientHello 明文 SNI 识别目标, 盲转发字节到 CF 边缘。
-  // 非 CF 目标走直连 (更快)。Worker 全程只做 TCP 管道, 不参与 TLS 握手。
-  // 参考: https://github.com/suprev/CF-Workers-CheckProxyIP
-  if (proxyip && (TLS_PORTS.includes(port) || PLAIN_PORTS.includes(port))) {
-    let targetIsCF = false;
-    try {
-      if (_isIPAddr(host)) {
-        targetIsCF = isCloudflareIP(host);
-      } else {
-        // 域名: DoH 查 A 记录判断是否为 CF IP
-        const dohUrl = cfg.doh || 'https://cloudflare-dns.com/dns-query';
-        const aRecs = await withTimeout(_dohQuery(dohUrl, host, 'A'), 2500, 'doh timeout');
-        targetIsCF = aRecs.some(isCloudflareIP);
-      }
-    } catch (e) { /* 解析失败则默认直连 */ }
-    if (targetIsCF) {
-      try {
-        const ips = await resolveProxyIPs(cfg, proxyip);
-        for (const [ph, pp] of ips) {
-          try {
-            const sock = await withTimeout(connect({ hostname: ph, port: pp }), 1500, 'proxyip dial timeout');
-            return { sock, leftover: new Uint8Array(0) };
-          } catch (e) { /* 换下一个 IP */ }
-        }
-      } catch (e) { /* 解析失败, 回退直连 */ }
-      // ProxyIP 全失败则回退直连 (尽力而为)
-    }
+
+  // 1. 直连优先 (Direct-First)
+  // 彻底废除预先用 DoH 查域名 A 记录并强行走 ProxyIP 的逻辑。
+  // 域名目标 (如 api.x.com、google.com 等) 一律走 Worker 原生直连，杜绝 X (推特) 等站点因被强塞进 ProxyIP 报 403。
+  try {
+    return await direct();
+  } catch (e) {
+    // 直连失败 (或纯 CF 裸 IP 被 Cloudflare Socket 拦截拒绝)，降级走 ProxyIP 兜底
   }
-  return direct();
+
+  // 2. 直连失败才走 ProxyIP 兜底
+  if (proxyip) {
+    return await dialProxyIP(cfg, proxyip, host, port);
+  }
+  throw new Error('direct dial failed and no proxyip available');
 }
 
 async function connectViaSocks5(p, host, port) {
