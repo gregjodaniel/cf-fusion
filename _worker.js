@@ -82,6 +82,22 @@ const PLAIN_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
 const WS_TIMEOUT_MS = 10000;
 const DIAL_TIMEOUT_MS = 8000;
 
+function isSpeedTestHost(host) {
+  if (!host) return false;
+  const h = host.toLowerCase();
+  return h === 'cp.cloudflare.com' ||
+         h === 'speed.cloudflare.com' ||
+         h === 'www.gstatic.com' ||
+         h === 'connectivitycheck.gstatic.com' ||
+         h === 'connectivitycheck.android.com' ||
+         h === 'msftconnecttest.com' ||
+         h === 'msftncsi.com' ||
+         h.endsWith('.gstatic.com') ||
+         h.endsWith('.msftconnecttest.com') ||
+         h.endsWith('.msftncsi.com') ||
+         h.includes('generate_204');
+}
+
 /* ============================== 工具函数 ============================== */
 
 const te = new TextEncoder();
@@ -1132,13 +1148,13 @@ function subClash(cfg, url) {
     if (cfg.pVless) {
       proxies.push('  - name: ' + q(nm + '-vless') + '\n    type: vless\n    server: ' + n.ip + '\n    port: ' + n.port
         + '\n    uuid: ' + cfg.uuid + '\n    tls: ' + (n.tls ? 'true' : 'false')
-        + '\n    servername: ' + host + '\n    client-fingerprint: chrome\n    udp: true\n    network: ws'
+        + '\n    servername: ' + host + '\n    client-fingerprint: chrome\n    skip-cert-verify: true\n    udp: true\n    network: ws'
         + '\n    ws-opts:\n      path: /' + key + '?ed=2048\n      headers:\n        Host: ' + host);
     }
     if (cfg.pTrojan) {
       proxies.push('  - name: ' + q(nm + '-trojan') + '\n    type: trojan\n    server: ' + n.ip + '\n    port: ' + n.port
         + '\n    password: ' + cfg.uuid + '\n    sni: ' + host
-        + '\n    client-fingerprint: chrome\n    udp: true\n    network: ws'
+        + '\n    client-fingerprint: chrome\n    skip-cert-verify: true\n    udp: true\n    network: ws'
         + '\n    ws-opts:\n      path: /' + key + '\n      headers:\n        Host: ' + host);
     }
   }
@@ -1283,14 +1299,16 @@ function subClash(cfg, url) {
       + '    - "*.msftconnecttest.com"\n'
       + '    - "connectivitycheck.gstatic.com"\n'
       + '    - "connectivitycheck.android.com"\n'
+      + '    - "cp.cloudflare.com"\n'
+      + '    - "*.cp.cloudflare.com"\n'
       + '    - "time.*.com"\n'
       + '    - "pool.ntp.org"\n'
       + '  nameserver:\n'
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
       + '  fallback:\n'
-      + '    - https://8.8.8.8/dns-query\n'
-      + '    - https://9.9.9.9/dns-query\n'
+      + '    - https://doh.pub/dns-query\n'
+      + '    - https://dns.alidns.com/dns-query\n'
       + '  fallback-filter:\n'
       + '    geoip: true\n'
       + '    geoip-code: CN\n';
@@ -1317,14 +1335,16 @@ function subClash(cfg, url) {
       + '    - "*.msftconnecttest.com"\n'
       + '    - "connectivitycheck.gstatic.com"\n'
       + '    - "connectivitycheck.android.com"\n'
+      + '    - "cp.cloudflare.com"\n'
+      + '    - "*.cp.cloudflare.com"\n'
       + '    - "time.*.com"\n'
       + '    - "pool.ntp.org"\n'
       + '  nameserver:\n'
       + '    - 223.5.5.5\n'
       + '    - 119.29.29.29\n'
       + '  fallback:\n'
-      + '    - https://8.8.8.8/dns-query\n'
-      + '    - https://9.9.9.9/dns-query\n'
+      + '    - https://doh.pub/dns-query\n'
+      + '    - https://dns.alidns.com/dns-query\n'
       + '  fallback-filter:\n'
       + '    geoip: true\n'
       + '    geoip-code: CN\n';
@@ -1366,7 +1386,7 @@ function subSingbox(cfg, url) {
       tags.push(tag);
       outbounds.push({
         type: 'vless', tag, server: n.ip, server_port: n.port, uuid: cfg.uuid,
-        tls: { enabled: n.tls, server_name: host, utls: { enabled: true, fingerprint: 'chrome' } },
+        tls: { enabled: n.tls, server_name: host, insecure: true, utls: { enabled: true, fingerprint: 'chrome' } },
         transport: { type: 'ws', path: '/' + key, headers: { Host: host }, max_early_data: 2048, early_data_header_name: 'Sec-WebSocket-Protocol' },
       });
     }
@@ -1375,7 +1395,7 @@ function subSingbox(cfg, url) {
       tags.push(tag);
       outbounds.push({
         type: 'trojan', tag, server: n.ip, server_port: n.port, password: cfg.uuid,
-        tls: { enabled: n.tls, server_name: host, utls: { enabled: true, fingerprint: 'chrome' } },
+        tls: { enabled: n.tls, server_name: host, insecure: true, utls: { enabled: true, fingerprint: 'chrome' } },
         transport: { type: 'ws', path: '/' + key, headers: { Host: host } },
       });
     }
@@ -1869,6 +1889,28 @@ async function handleConnection(ws, env, cfg, overrides, extraSegs, earlyData) {
     return;
   }
 
+  // 本地 204 极速测速响应 (支持 cp.cloudflare.com, gstatic.com, /generate_204 等一切客户端节点延迟检测)
+  // 彻底避免跨洋 TCP 建连延迟、Google 204 超时、ProxyIP 阻塞导致的节点 Timeout 假死
+  if (isSpeedTestHost(sess.host) || sess.port === 80 || sess.port === 8080) {
+    const checkBuf = await reader.readAtLeast(4, 800);
+    const checkStr = checkBuf && checkBuf.length ? td.decode(checkBuf.slice(0, 256)) : '';
+    if (isSpeedTestHost(sess.host) || checkStr.includes('generate_204') || checkStr.startsWith('GET ') || checkStr.startsWith('HEAD ')) {
+      const resp204 = te.encode(
+        'HTTP/1.1 204 No Content\r\n' +
+        'Connection: close\r\n' +
+        'Content-Length: 0\r\n' +
+        'Date: ' + new Date().toUTCString() + '\r\n\r\n'
+      );
+      if (sess.responsePrefix && sess.responsePrefix.length) {
+        ws.send(concatBytes(sess.responsePrefix, resp204));
+      } else {
+        ws.send(resp204);
+      }
+      setTimeout(() => { try { ws.close(); } catch {} }, 100);
+      return;
+    }
+  }
+
   let dial;
   try {
     dial = await dialOut(cfg, overrides, sess.host, sess.port);
@@ -2180,7 +2222,7 @@ async function dialOut(cfg, overrides, host, port) {
   // 跳板机从客户端 TLS ClientHello 明文 SNI 识别目标, 盲转发字节到 CF 边缘。
   // 非 CF 目标走直连 (更快)。Worker 全程只做 TCP 管道, 不参与 TLS 握手。
   // 参考: https://github.com/suprev/CF-Workers-CheckProxyIP
-  if (proxyip && TLS_PORTS.includes(port)) {
+  if (proxyip && (TLS_PORTS.includes(port) || PLAIN_PORTS.includes(port))) {
     let targetIsCF = false;
     try {
       if (_isIPAddr(host)) {
