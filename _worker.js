@@ -837,7 +837,7 @@ function adminPanelHTML() {
   + 'api("ips").then(function(d){c.preferredIps=d.ips;'
   + 'return api("config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});})'
   + '.then(function(r){if(btn){btn.disabled=false;btn.textContent="✓ 保存成功";setTimeout(function(){btn.textContent="保存";},2000);}'
-  + 'if(r.ok){showMsg("保存成功, 已立即生效",true);if(c.adminPass&&c.adminPass!==pw){pw=c.adminPass;sessionStorage.setItem("cfu_pw",pw);}}'
+  + 'if(r.ok){showMsg("保存成功, 已立即生效",true);loadLinks();if(c.adminPass&&c.adminPass!==pw){pw=c.adminPass;sessionStorage.setItem("cfu_pw",pw);}}'
   + 'else showMsg("保存失败: "+(r.error||""),false);}).catch(function(e){if(btn){btn.disabled=false;btn.textContent="保存";}'
   + 'showMsg(e.message,false);});}'
   + 'function resetConfig(){if(!confirm("清空面板配置并回退到环境变量?"))return;'
@@ -936,7 +936,7 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
       if (!env.KV) return json({ error: 'Worker 缺少 KV 绑定，请检查 wrangler.toml 的 kv_namespaces 配置' }, 500);
       const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
       const next = { ...kvc };
-      for (const k of ['uuid','adminPass','subKey','customPath','proxyip','outbound','outboundMode','fakeUrl','doh','maxNodes','pVless','pTrojan','pSs','logConn','preferredIps']) {
+      for (const k of ['uuid','adminPass','subKey','customPath','proxyip','outbound','outboundMode','fakeUrl','doh','maxNodes','pVless','pTrojan','pSs','logConn','enableVg','preferredIps']) {
         if (body[k] !== undefined) next[k] = body[k];
       }
       if (typeof next.customPath === 'string') next.customPath = next.customPath.replace(/^\/+|\/+$/g, '');
