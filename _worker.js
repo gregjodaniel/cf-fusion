@@ -530,7 +530,7 @@ export default {
         return handleHomeBroadbandSub(cfg, url);
       }
       if (sub === 'sub') return subPlain(cfg, url);
-      if (sub === 'clash') return subClash(cfg, url);
+      if (sub === 'clash') return await subClash(cfg, url);
       if (sub === 'singbox' || sub === 'sing-box') return subSingbox(cfg, url);
       if (sub === 'v2ray') return subV2ray(cfg, url);
       if (!sub) {
@@ -666,20 +666,18 @@ function sharePageHTML(cfg, url) {
     + 'button:active{opacity:.8}.node{display:flex;gap:8px;margin-bottom:8px;align-items:center}'
     + '.tip{color:#888;font-size:13px}.clients{line-height:2}</style></head><body><div class="wrap">'
     + '<div class="card"><h2>订阅地址</h2>'
-    + subRow(base + '/sub', '通用订阅 (v2rayNG / NekoBox / Shadowrocket)') 
-    + subRow(base + '/clash', 'Clash 订阅 (极简规则)')
-    + subRow(base + '/clash?rules=full', 'Clash 完整分流 (含 Loyalsoldier 规则集)')
-    + subRow(base + '/singbox', 'Sing-box 订阅 (极简规则, 建议 1.12+ 内核)')
-    + subRow(base + '/singbox?rules=full', 'Sing-box 完整分流 (含 MetaCubeX 规则集)')
-    + (cfg.enableVg ? subRow(base + '/vg', 'CLASH 家宽链式订阅 (仅 mihomo ≥ 1.19.25)') : '')
+    + subRow(base + '/sub', '通用订阅 (小火箭 / v2rayNG / NekoBox / 单节点)') 
+    + subRow(base + '/clash', 'Clash 订阅 (FlClash / Clash Verge / 完整分流 + 家宽合一)')
+    + subRow(base + '/singbox', 'Sing-box 订阅 (完整分流 / 建议 1.12+ 内核)')
+    + (cfg.enableVg ? subRow(base + '/vg', '备用: 纯家宽订阅 (仅包含 OpenVPN 节点)') : '')
     + '<p class="tip">把订阅地址填入客户端的订阅管理即可, 每 15 分钟左右会自动更新优选。</p></div>'
-    + (cfg.enableVg ? '<div class="card" style="background:#fffbe6;border:1px solid #ffe58f"><h2>⚠️ 家宽链式代理须知</h2><p class="tip" style="color:#ad6800">1. 流量出口为全球志愿者共享家庭宽带，TLS 可保内容安全，但出口端可观测目标域名与 DNS。请勿用于敏感账户！<br>2. 仅支持 mihomo ≥ 1.19.25 (如 Clash Verge Rev、FlClash)；Sing-box、v2rayNG 等客户端不支持链式代理。<br>3. 节点掉线为正常现象，「🏠 家宽自动」策略组具备自动切换能力。</p></div>' : '')
+    + (cfg.enableVg ? '<div class="card" style="background:#fffbe6;border:1px solid #ffe58f"><h2>💡 家宽链式代理提示</h2><p class="tip" style="color:#ad6800">1. Clash 订阅已自动聚合家宽住宅 IP 与 Cloudflare 优选节点，在客户端内选择「🏠 家宽自动」或具体「🏠 家宽节点」即可使用。<br>2. 流量出口为全球志愿者共享家庭宽带，TLS 可保内容安全，但出口端可观测目标域名与 DNS。请勿用于敏感账户！<br>3. 链式代理要求客户端内核为 mihomo ≥ 1.19.25 (如 Clash Verge Rev、FlClash)。</p></div>' : '')
     + '<div class="card"><h2>节点链接 (前 ' + nodes.length + ' 个)</h2>' + nodeRows + '</div>'
     + '<div class="card"><h2>客户端推荐</h2><div class="clients">'
-    + 'Android: v2rayNG / NekoBox / Karing / ClashMeta<br>'
-    + 'Windows: v2rayN / Hiddify / Karing / Clash Verge Rev<br>'
+    + 'Android: v2rayNG / NekoBox / Karing / FlClash<br>'
+    + 'Windows: v2rayN / Hiddify / Karing / Clash Verge Rev / FlClash<br>'
     + 'iOS: Shadowrocket(小火箭) / Stash / Surge / Karing / Hiddify<br>'
-    + 'macOS: Clash Verge Rev / Surge / Stash<br>'
+    + 'macOS: Clash Verge Rev / FlClash / Surge / Stash<br>'
     + '软路由: passwall / ssr-plus / homeproxy</div>'
     + '<p class="tip">管理后台: https://' + host + '/admin</p></div>'
     + '</div><script>'
@@ -811,10 +809,14 @@ function adminPanelHTML() {
   + 'try{document.execCommand("copy")}catch(e){}document.body.removeChild(ta);done();}}'
   + 'function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}'
   + 'function loadLinks(){api("links").then(function(d){var h="";'
-  + 'var items=[["通用订阅",d.sub],["Clash 极简订阅",d.clash],["Clash 完整分流",d.clashFull],["Sing-box 极简订阅",d.singbox],["Sing-box 完整分流",d.singboxFull]];'
-  + 'if(d.vg)items.push(["CLASH 家宽链式 (仅 mihomo)",d.vg]);'
-  + 'items.push(["分享页",d.share]);'
-  + 'items.forEach(function(it){h+=\'<div class="linkrow"><code>\'+esc(it[1])+\'</code><button class="cp" onclick="cp2(this,\\\'\'+it[1]+\'\\\')">复制</button></div>\';});'
+  + 'var items=['
+  + '["通用订阅 (小火箭 / v2rayNG / 纯节点)",d.sub],'
+  + '["Clash 订阅 (FlClash / Clash Verge / 完整分流 + 家宽合一)",d.clash],'
+  + '["Sing-box 订阅 (完整分流)",d.singbox],'
+  + '["分享页 (网页端导航与节点二维码)",d.share]'
+  + '];'
+  + 'if(d.vg)items.push(["备用: 纯家宽订阅 (仅包含 OpenVPN 节点)",d.vg]);'
+  + 'items.forEach(function(it){h+=\'<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;color:#333;margin-bottom:4px">\'+esc(it[0])+\'</div><div class="linkrow"><code>\'+esc(it[1])+\'</code><button class="cp" onclick="cp2(this,\\\'\'+it[1]+\'\\\')">复制</button></div></div>\';});'
   + 'document.getElementById("links").innerHTML=h;}).catch(function(e){showMsg(e.message,false);});}'
   + 'function loadConfig(){api("config").then(function(c){'
   + '["uuid","adminPass","subKey","customPath","proxyip","outbound","outboundMode","fakeUrl","doh","maxNodes"].forEach(function(k){'
@@ -1015,12 +1017,12 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
     const key = cfg.customPath || cfg.subKey;
     const base = 'https://' + url.host + '/' + key;
     const res = {
-      share: base,
       sub: base + '/sub',
       clash: base + '/clash',
-      clashFull: base + '/clash?rules=full',
       singbox: base + '/singbox',
-      singboxFull: base + '/singbox?rules=full',
+      share: base,
+      clashFull: base + '/clash',
+      singboxFull: base + '/singbox',
       v2ray: base + '/v2ray'
     };
     if (cfg.enableVg) res.vg = base + '/vg';
@@ -1232,11 +1234,12 @@ function subV2ray(cfg, url) {
 
 function q(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
 
-function subClash(cfg, url) {
+async function subClash(cfg, url) {
   const host = url.host;
   const key = cfg.customPath || cfg.subKey;
   const nodes = buildNodes(cfg, host);
-  const isFull = url.searchParams.get('rules') === 'full' || url.searchParams.get('full') === '1';
+  const isMini = url.searchParams.get('rules') === 'mini' || url.searchParams.get('mini') === '1';
+  const isFull = !isMini;
   const proxies = [];
   for (const n of nodes) {
     const nm = n.name;
@@ -1260,6 +1263,82 @@ function subClash(cfg, url) {
   }
   const nameList = allNames.length ? allNames.map(q).join(', ') : 'DIRECT';
 
+  // 家宽链式代理集成 (VPN Gate 住宅宽带通过 dialer-proxy 链式穿透)
+  const tlsNodes = nodes.filter(n => n.tls);
+  const frontNodes = tlsNodes.length ? tlsNodes : nodes;
+  const frontNames = [];
+  for (const n of frontNodes) {
+    if (cfg.pVless) frontNames.push(n.name + '-vless');
+    else if (cfg.pTrojan) frontNames.push(n.name + '-trojan');
+  }
+
+  let vgItems = [];
+  let vgCerts = null;
+  if (cfg.enableVg) {
+    try {
+      const vgData = await fetchVgNodes();
+      const countryCounts = {};
+      vgItems = vgData.nodes.map(n => {
+        countryCounts[n.country] = (countryCounts[n.country] || 0) + 1;
+        const seq = String(countryCounts[n.country]).padStart(2, '0');
+        return {
+          ...n,
+          name: `🏠 ${n.country}-家宽-${seq}`,
+        };
+      });
+      vgCerts = vgData.certs;
+    } catch (e) {
+      console.warn('VPN Gate nodes fetch failed, fallback to CF nodes only:', e.message);
+    }
+  }
+
+  const frontGroup = '⚡ CF前置';
+  const autoVgGroup = '🏠 家宽自动';
+  const selectVgGroup = '🏠 家宽节点';
+
+  if (vgItems.length > 0 && vgCerts && frontNames.length > 0) {
+    vgItems.forEach((n, idx) => {
+      const lines = [
+        `  - name: ${q(n.name)}`,
+        '    type: openvpn',
+        `    server: ${n.host}`,
+        `    port: ${n.port}`,
+        '    proto: tcp',
+        '    username: vpn',
+        '    password: vpn',
+        `    cipher: ${n.cipher}`,
+        `    auth: ${n.auth}`,
+        '    udp: false',
+        '    handshake-timeout: 30',
+        '    remote-dns-resolve: true',
+        '    dns: [ 8.8.8.8, 1.1.1.1 ]',
+        `    dialer-proxy: ${q(frontGroup)}`,
+      ];
+      if (idx === 0) {
+        lines.push('    ca: &vgca |-\n' + indentCert(vgCerts.ca, '      '));
+        lines.push('    cert: &vgcert |-\n' + indentCert(vgCerts.cert, '      '));
+        lines.push('    key: &vgkey |-\n' + indentCert(vgCerts.key, '      '));
+      } else {
+        lines.push('    ca: *vgca', '    cert: *vgcert', '    key: *vgkey');
+      }
+      proxies.push(lines.join('\n'));
+    });
+  }
+
+  const speedSortedVgNames = vgItems.map(i => q(i.name)).join(', ');
+  const countrySortedVgNames = vgItems.slice()
+    .sort((a, b) => a.country.localeCompare(b.country))
+    .map(i => q(i.name)).join(', ');
+
+  const vgGroupBlocks = [];
+  if (vgItems.length > 0 && frontNames.length > 0) {
+    vgGroupBlocks.push(
+      '  - name: ' + q(frontGroup) + '\n    type: url-test\n    url: http://cp.cloudflare.com/generate_204\n    interval: 300\n    proxies: [' + frontNames.map(q).join(', ') + ']',
+      '  - name: ' + q(autoVgGroup) + '\n    type: fallback\n    url: http://www.gstatic.com/generate_204\n    interval: 1800\n    lazy: true\n    proxies: [' + speedSortedVgNames + ']',
+      '  - name: ' + q(selectVgGroup) + '\n    type: select\n    proxies: [' + countrySortedVgNames + ']'
+    );
+  }
+
   // 地区分组
   const regionGroupBlocks = [];
   const activeRegionNames = [];
@@ -1281,8 +1360,19 @@ function subClash(cfg, url) {
       );
     }
   }
-  const regList = activeRegionNames.map(q).join(', ');
-  const mainProxies = [q('♻️ 自动选择'), ...(regList ? [regList] : []), nameList, q('🎯 全球直连')].join(', ');
+
+  const mainProxiesList = [q('♻️ 自动选择')];
+  if (vgItems.length > 0) {
+    mainProxiesList.push(q(autoVgGroup), q(selectVgGroup));
+  }
+  if (activeRegionNames.length) {
+    mainProxiesList.push(...activeRegionNames.map(q));
+  }
+  if (nameList) {
+    mainProxiesList.push(nameList);
+  }
+  mainProxiesList.push(q('🎯 全球直连'));
+  const mainProxies = mainProxiesList.join(', ');
 
   let yaml = '';
   if (isFull) {
@@ -1308,6 +1398,7 @@ function subClash(cfg, url) {
       provider('applications', 'classical')
     ].join('\n');
 
+    const vgMediaList = vgItems.length ? [q(autoVgGroup)] : [];
     const openAiRegions = ['US', 'JP', 'SG'].map(c => regionMap[c]).filter(Boolean).map(q);
     const netflixRegions = ['HK', 'JP', 'SG', 'US'].map(c => regionMap[c]).filter(Boolean).map(q);
     const biliRegions = ['HK', 'TW'].map(c => regionMap[c]).filter(Boolean).map(q);
@@ -1316,14 +1407,15 @@ function subClash(cfg, url) {
       'proxy-groups:',
       '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']',
       '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://cp.cloudflare.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']',
+      ...(vgGroupBlocks.length ? vgGroupBlocks : []),
       ...(regionGroupBlocks.length ? regionGroupBlocks : []),
-      '  - name: ' + q('🌍 国外媒体') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('🌍 国外媒体') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...vgMediaList, ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
       '  - name: ' + q('📺 哔哩哔哩') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), ...biliRegions, q('🚀 节点选择'), q('♻️ 自动选择'), nameList].join(', ') + ']',
       '  - name: ' + q('📹 油管视频') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('🌍 国外媒体'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
-      '  - name: ' + q('🎬 奈飞视频') + '\n    type: select\n    proxies: [' + [...netflixRegions, q('🚀 节点选择'), q('🌍 国外媒体'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('🎬 奈飞视频') + '\n    type: select\n    proxies: [' + [...netflixRegions, ...vgMediaList, q('🚀 节点选择'), q('🌍 国外媒体'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
       '  - name: ' + q('📲 电报信息') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
       '  - name: ' + q('🌐 谷歌服务') + '\n    type: select\n    proxies: [' + [q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
-      '  - name: ' + q('🤖 OpenAI') + '\n    type: select\n    proxies: [' + [...openAiRegions, q('🚀 节点选择'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
+      '  - name: ' + q('🤖 OpenAI') + '\n    type: select\n    proxies: [' + [...openAiRegions, ...vgMediaList, q('🚀 节点选择'), q('♻️ 自动选择'), nameList, q('🎯 全球直连')].join(', ') + ']',
       '  - name: ' + q('Ⓜ️ 微软服务') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList].join(', ') + ']',
       '  - name: ' + q('🍎 苹果服务') + '\n    type: select\n    proxies: [' + [q('🎯 全球直连'), q('🚀 节点选择'), ...activeRegionNames.map(q), q('♻️ 自动选择'), nameList].join(', ') + ']',
       '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]',
@@ -1452,6 +1544,7 @@ function subClash(cfg, url) {
       + 'proxy-groups:\n'
       + '  - name: ' + q('🚀 节点选择') + '\n    type: select\n    proxies: [' + mainProxies + ']\n'
       + '  - name: ' + q('♻️ 自动选择') + '\n    type: url-test\n    url: http://cp.cloudflare.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies: [' + nameList + ']\n'
+      + (vgGroupBlocks.length ? vgGroupBlocks.join('\n') + '\n' : '')
       + (regionGroupBlocks.length ? regionGroupBlocks.join('\n') + '\n' : '')
       + '  - name: ' + q('🎯 全球直连') + '\n    type: select\n    proxies: [DIRECT]\n'
       + '  - name: ' + q('🛑 全球拦截') + '\n    type: select\n    proxies: [REJECT, DIRECT]\n'
@@ -1472,7 +1565,8 @@ function subSingbox(cfg, url) {
   const host = url.host;
   const key = cfg.customPath || cfg.subKey;
   const nodes = buildNodes(cfg, host);
-  const isFull = url.searchParams.get('rules') === 'full' || url.searchParams.get('full') === '1';
+  const isMini = url.searchParams.get('rules') === 'mini' || url.searchParams.get('mini') === '1';
+  const isFull = !isMini;
   const outbounds = [];
   const tags = [];
   for (const n of nodes) {
