@@ -16,3 +16,7 @@ ADMIN_PASS = "joyboy"
 CUSTOM_PATH = "shan"
 # 全局反代 IP / 域名
 PROXYIP = "ProxyIP.US.CMLiussss.net"
+
+# 定时触发器 (每 7 小时自动拉取并更新优选 IP)
+[triggers]
+crons = ["0 */7 * * *"]

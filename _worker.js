@@ -631,8 +631,56 @@ export default {
       return new Response(fakePageHTML(), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
     }
     return new Response('Not Found', { status: 404 });
+  },
+
+  // 5) 定时任务：每 7 小时自动同步优选 IP
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(handleScheduledSync(env));
   }
 };
+
+/**
+ * 定时任务：自动同步优选 IP 源 (每 7 小时由 Cloudflare Cron Trigger 触发)
+ * 具备多层容灾防清空机制：
+ * 1. 抓取超时限制 (8000ms)
+ * 2. 状态码必须 200
+ * 3. 解析结果必须包含至少 5 个有效 IP，否则坚决不覆写 KV
+ * 4. 出现任何异常仅记录警告日志，绝不抛出异常导致 Worker 崩溃
+ */
+async function handleScheduledSync(env) {
+  if (!env || !env.KV) return;
+  try {
+    const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
+    const sourceUrl = (kvc.preferredIpsSourceUrl || 'https://bestcf.pages.dev/cfyes/ipv4.txt').trim();
+    const resp = await withTimeout(
+      fetch(sourceUrl, {
+        headers: { 'User-Agent': 'cf-fusion-updater/1.0', 'Accept': 'text/plain' },
+        signal: AbortSignal.timeout(8000)
+      }),
+      8000,
+      'fetch timeout'
+    );
+    if (!resp.ok) {
+      console.warn(`[CronSync] Failed to fetch preferred IPs: HTTP ${resp.status}, retained previous IPs.`);
+      return;
+    }
+    const txt = await resp.text();
+    const parsed = parsePreferredIpsTxt(txt);
+    if (!parsed || parsed.length < 5) {
+      console.warn(`[CronSync] Parsed IPs count (${parsed ? parsed.length : 0}) < 5, retained previous IPs to avoid corruption.`);
+      return;
+    }
+
+    kvc.preferredIps = parsed;
+    kvc.preferredIpsSourceUrl = sourceUrl;
+    kvc.preferredIpsLastSync = new Date().toISOString();
+    await kvPut(env, 'cfu:config', JSON.stringify(kvc));
+    clearConfigCache();
+    console.log(`[CronSync] Successfully synchronized ${parsed.length} preferred IPs from ${sourceUrl} at ${kvc.preferredIpsLastSync}`);
+  } catch (e) {
+    console.error(`[CronSync] Error during cron sync: ${e.message}, safely retained previous IPs.`);
+  }
+}
 
 /* ---- 首页伪装页 ---- */
 function fakePageHTML() {
@@ -678,7 +726,13 @@ function sharePageHTML(cfg, url) {
     + 'Windows: v2rayN / Hiddify / Karing / Clash Verge Rev / FlClash<br>'
     + 'iOS: Shadowrocket(小火箭) / Stash / Surge / Karing / Hiddify<br>'
     + 'macOS: Clash Verge Rev / FlClash / Surge / Stash<br>'
-    + '软路由: passwall / ssr-plus / homeproxy</div>'
+    + '<div class="card" style="font-size:13px;color:#555;line-height:1.8"><h2>❤️ 开源致谢与公益数据源</h2>'
+    + '<p style="margin:0 0 8px">本项目承蒙以下开源社区与公益基础设施的无私支持，特此鸣谢：</p>'
+    + '<ul style="margin:0 0 10px 18px;padding:0">'
+    + '<li><b>Anycast 优选测速源：</b>感谢 <a href="https://bestcf.pages.dev/" target="_blank" rel="noopener" style="color:#1677ff;font-weight:600;text-decoration:none">BestCF (bestcf.pages.dev)</a> 提供的全国三网自动化测速与优质 IP 聚合。</li>'
+    + '<li><b>全球家宽学术项目：</b>感谢 <a href="https://www.vpngate.net/" target="_blank" rel="noopener" style="color:#1677ff;font-weight:600;text-decoration:none">VPN Gate (筑波大学学术实验)</a> 以及全球无数志愿者的住宅宽带节点奉献。</li>'
+    + '</ul>'
+    + '<p style="color:#888;font-size:12px;margin:0">⚠️ 节点数据仅供网络连通性测试与学术技术交流，请合理合法使用。</p></div>'
     + '<p class="tip">管理后台: https://' + host + '/admin</p></div>'
     + '</div><script>'
     + 'function copyText(btn){var t=btn.getAttribute("data-t");'
@@ -765,13 +819,17 @@ function adminPanelHTML() {
   + '<button class="btn danger" onclick="resetConfig()">清空面板配置(回退到环境变量)</button></div>'
   // 优选 IP tab
   + '<div class="card page hide" id="p-ips"><h3>优选 IP / 域名 (用于生成订阅节点)</h3>'
-  + '<div class="f"><label>外部优选 TXT 订阅源 (支持从第三方在线自动同步更新)</label>'
+  + '<div class="f"><label>外部优选 TXT 订阅源 (系统已开启 <b>每 7 小时自动拉取</b> 定时同步)</label>'
   + '<div style="display:flex;gap:8px"><input type="text" id="ipsSourceUrl" placeholder="https://bestcf.pages.dev/cfyes/ipv4.txt" style="flex:1">'
-  + '<button class="btn" id="btnSyncIps" onclick="syncIps(this)">立即从订阅源同步</button></div></div>'
+  + '<button class="btn" id="btnSyncIps" onclick="syncIps(this)">立即从订阅源同步</button></div>'
+  + '<div id="ipsSyncStatus" style="font-size:12px;color:#888;margin-top:6px"></div></div>'
   + '<div class="f" style="margin-top:10px"><label>优选列表预览与编辑 (存入 KV，每行一个)</label>'
   + '<textarea id="ips" placeholder="1.1.1.1" style="height:220px"></textarea></div>'
   + '<button class="btn" onclick="saveIps()">保存</button>'
-  + '<button class="btn ghost" onclick="defaultIps()">恢复默认官方 IP</button></div>'
+  + '<button class="btn ghost" onclick="defaultIps()">恢复默认官方 IP</button>'
+  + '<p style="color:#666;font-size:13px;margin-top:14px;line-height:1.6">💡 <b>公益数据源致谢：</b><br>'
+  + '1. Anycast 优选测速源：感谢 <a href="https://bestcf.pages.dev/" target="_blank" rel="noopener" style="color:#1677ff">BestCF (bestcf.pages.dev)</a> 提供的全国三网自动化测速数据支持。<br>'
+  + '2. 住宅宽带学术项目：感谢 <a href="https://www.vpngate.net/" target="_blank" rel="noopener" style="color:#1677ff">VPN Gate (筑波大学实验项目)</a> 以及全球广大志愿者的宽带节点奉献。</p></div>'
   // 测速 tab
   + '<div class="card page hide" id="p-speed"><h3>延迟测试与落地机房识别</h3>'
   + '<div class="f"><label>测试目标 (每行一个, 格式 ip 或 ip:端口 或 ip#备注, 最多 30 个)</label>'
@@ -846,12 +904,13 @@ function adminPanelHTML() {
   + 'api("config",{method:"DELETE"}).then(function(){showMsg("已清空, 重新加载中",true);loadConfig();loadIps();});}'
   + 'function loadIps(){api("ips").then(function(d){document.getElementById("ips").value=(d.ips||[]).join("\\n");'
   + 'if(d.sourceUrl)document.getElementById("ipsSourceUrl").value=d.sourceUrl;'
+  + 'var st=document.getElementById("ipsSyncStatus");if(st){st.textContent=d.lastSync?("最近同步: "+d.lastSync.replace("T"," ").slice(0,19)+" (每 7 小时自动更新)"):("定时机制: 每 7 小时后台自动同步");}'
   + 'document.getElementById("speedHosts").value=(d.ips||[]).slice(0,20).join("\\n");});}'
   + 'function syncIps(btn){btn=btn||document.getElementById("btnSyncIps");var url=document.getElementById("ipsSourceUrl").value.trim();'
   + 'if(!url){showMsg("请先输入优选源 URL",false);return;}if(btn){btn.disabled=true;btn.textContent="同步中...";}'
   + 'api("ips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sync:true,url:url})})'
   + '.then(function(r){if(btn){btn.disabled=false;btn.textContent="立即从订阅源同步";}'
-  + 'if(r.ok){document.getElementById("ips").value=(r.ips||[]).join("\\n");document.getElementById("speedHosts").value=(r.ips||[]).slice(0,20).join("\\n");showMsg("✓ 成功同步 "+r.count+" 个优选节点并存入 KV",true);}'
+  + 'if(r.ok){document.getElementById("ips").value=(r.ips||[]).join("\\n");document.getElementById("speedHosts").value=(r.ips||[]).slice(0,20).join("\\n");var st=document.getElementById("ipsSyncStatus");if(st&&r.lastSync)st.textContent="最近同步: "+r.lastSync.replace("T"," ").slice(0,19)+" (每 7 小时自动更新)";showMsg("✓ 成功同步 "+r.count+" 个优选节点并存入 KV",true);}'
   + 'else showMsg(r.error||"同步失败",false);}).catch(function(e){if(btn){btn.disabled=false;btn.textContent="立即从订阅源同步";}'
   + 'showMsg(e.message,false);});}'
   + 'function saveIps(){var ips=document.getElementById("ips").value.split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
@@ -960,7 +1019,8 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
       const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
       return json({
         ips: cfg.preferredIps,
-        sourceUrl: kvc.preferredIpsSourceUrl || 'https://bestcf.pages.dev/cfyes/ipv4.txt'
+        sourceUrl: kvc.preferredIpsSourceUrl || 'https://bestcf.pages.dev/cfyes/ipv4.txt',
+        lastSync: kvc.preferredIpsLastSync || null
       });
     }
     if (request.method === 'POST') {
@@ -968,32 +1028,39 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
       try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
       const kvc = (await kvGetJSON(env, 'cfu:config')) || {};
 
-      // 同步外部 TXT 优选源 (带降级容灾：抓取失败不破坏现有 KV 缓存)
+      // 同步外部 TXT 优选源 (带降级容灾：抓取失败不破坏现有 KV 缓存, 必须 >= 5 个有效 IP)
       if (body.sync) {
         const sourceUrl = (body.url || kvc.preferredIpsSourceUrl || 'https://bestcf.pages.dev/cfyes/ipv4.txt').trim();
         try {
           const resp = await withTimeout(
-            fetch(sourceUrl, { signal: AbortSignal.timeout(6000) }),
-            6000,
+            fetch(sourceUrl, {
+              headers: { 'User-Agent': 'cf-fusion-updater/1.0', 'Accept': 'text/plain' },
+              signal: AbortSignal.timeout(8000)
+            }),
+            8000,
             'fetch timeout'
           );
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const txt = await resp.text();
           const parsed = parsePreferredIpsTxt(txt);
-          if (!parsed.length) throw new Error('从该订阅源中未解析出合法的优选 IP');
+          if (!parsed || parsed.length < 5) {
+            throw new Error(`从订阅源中仅解析出 ${parsed ? parsed.length : 0} 个有效 IP（少于 5 个安全阈值，已拒绝覆写以防清空）`);
+          }
           
           kvc.preferredIps = parsed;
           kvc.preferredIpsSourceUrl = sourceUrl;
+          kvc.preferredIpsLastSync = new Date().toISOString();
           await kvPut(env, 'cfu:config', JSON.stringify(kvc));
           clearConfigCache();
-          return json({ ok: true, ips: parsed, sourceUrl, count: parsed.length });
+          return json({ ok: true, ips: parsed, sourceUrl, count: parsed.length, lastSync: kvc.preferredIpsLastSync });
         } catch (e) {
           // 降级容灾链：外部源抓取失败时，保留现有 KV 优选数据，确保订阅绝对不受影响
           return json({
             ok: false,
             error: `同步失败: ${e.message}（已保留现有 KV 优选数据，订阅不受影响）`,
             ips: cfg.preferredIps,
-            sourceUrl
+            sourceUrl,
+            lastSync: kvc.preferredIpsLastSync || null
           }, 502);
         }
       }
@@ -1500,8 +1567,17 @@ async function subClash(cfg, url) {
       + '    geoip: true\n'
       + '    geoip-code: CN\n';
 
+    const clashHeader =
+      '# ============================================================================== #\n'
+      + '# cf-fusion 一体化智能代理订阅                                                   #\n'
+      + '# 致谢与公益数据源:                                                              #\n'
+      + '# 1. Anycast 优选测速源: 感谢 BestCF (https://bestcf.pages.dev/) 自动化测速支持 #\n'
+      + '# 2. 全球住宅宽带: 感谢 VPN Gate (https://www.vpngate.net/) 筑波大学学术实验项目 #\n'
+      + '# ============================================================================== #\n';
+
     yaml =
-      '# cf-fusion 完整分流规则 (Loyalsoldier 规则集, 客户端直连获取)\n'
+      clashHeader
+      + '# 规则类型: 完整分流规则 (Loyalsoldier 规则集, 客户端直连获取)\n'
       + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
       + clashDNS
       + 'proxies:\n' + proxies.join('\n') + '\n'
@@ -1509,6 +1585,14 @@ async function subClash(cfg, url) {
       + fullProviders + '\n'
       + fullRules + '\n';
   } else {
+    const clashHeader =
+      '# ============================================================================== #\n'
+      + '# cf-fusion 一体化智能代理订阅                                                   #\n'
+      + '# 致谢与公益数据源:                                                              #\n'
+      + '# 1. Anycast 优选测速源: 感谢 BestCF (https://bestcf.pages.dev/) 自动化测速支持 #\n'
+      + '# 2. 全球住宅宽带: 感谢 VPN Gate (https://www.vpngate.net/) 筑波大学学术实验项目 #\n'
+      + '# ============================================================================== #\n';
+
     const clashDNS =
       'dns:\n'
       + '  enable: true\n'
@@ -1537,7 +1621,8 @@ async function subClash(cfg, url) {
       + '    geoip-code: CN\n';
 
     yaml =
-      '# cf-fusion 极简订阅 (本地生成, 无第三方转换)\n'
+      clashHeader
+      + '# 规则类型: 极简订阅 (本地生成, 无第三方转换)\n'
       + 'mixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\n'
       + clashDNS
       + 'proxies:\n' + proxies.join('\n') + '\n'
