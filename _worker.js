@@ -530,7 +530,7 @@ export default {
         return handleHomeBroadbandSub(cfg, url);
       }
       if (sub === 'sub') return subPlain(cfg, url);
-      if (sub === 'clash') return await subClash(cfg, url);
+      if (sub === 'clash' || sub === 'flclash') return await subClash(cfg, url, request);
       if (sub === 'singbox' || sub === 'sing-box') return subSingbox(cfg, url);
       if (sub === 'v2ray') return subV2ray(cfg, url);
       if (!sub) {
@@ -715,7 +715,8 @@ function sharePageHTML(cfg, url) {
     + '.tip{color:#888;font-size:13px}.clients{line-height:2}</style></head><body><div class="wrap">'
     + '<div class="card"><h2>订阅地址</h2>'
     + subRow(base + '/sub', '通用订阅 (小火箭 / v2rayNG / NekoBox / 单节点)') 
-    + subRow(base + '/clash', 'Clash 订阅 (FlClash / Clash Verge / 完整分流 + 家宽合一)')
+    + subRow(base + '/clash', 'Clash 订阅 (Clash Meta / 通用兼容版 / 绝不报错)')
+    + (cfg.enableVg ? subRow(base + '/flclash', 'FlClash 订阅 (含住宅家宽合一版 / FlClash 专用)') : '')
     + subRow(base + '/singbox', 'Sing-box 订阅 (完整分流 / 建议 1.12+ 内核)')
     + (cfg.enableVg ? subRow(base + '/vg', '备用: 纯家宽订阅 (仅包含 OpenVPN 节点)') : '')
     + '<p class="tip">把订阅地址填入客户端的订阅管理即可, 每 15 分钟左右会自动更新优选。</p></div>'
@@ -869,10 +870,10 @@ function adminPanelHTML() {
   + 'function loadLinks(){api("links").then(function(d){var h="";'
   + 'var items=['
   + '["通用订阅 (小火箭 / v2rayNG / 纯节点)",d.sub],'
-  + '["Clash 订阅 (FlClash / Clash Verge / 完整分流 + 家宽合一)",d.clash],'
-  + '["Sing-box 订阅 (完整分流)",d.singbox],'
-  + '["分享页 (网页端导航与节点二维码)",d.share]'
+  + '["Clash 订阅 (Clash Meta / 通用兼容版 / 绝不报错)",d.clash]'
   + '];'
+  + 'if(d.flclash)items.push(["FlClash 订阅 (含住宅家宽合一版 / FlClash 专用)",d.flclash]);'
+  + 'items.push(["Sing-box 订阅 (完整分流)",d.singbox],["分享页 (网页端导航与节点二维码)",d.share]);'
   + 'if(d.vg)items.push(["备用: 纯家宽订阅 (仅包含 OpenVPN 节点)",d.vg]);'
   + 'items.forEach(function(it){h+=\'<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;color:#333;margin-bottom:4px">\'+esc(it[0])+\'</div><div class="linkrow"><code>\'+esc(it[1])+\'</code><button class="cp" onclick="cp2(this,\\\'\'+it[1]+\'\\\')">复制</button></div></div>\';});'
   + 'document.getElementById("links").innerHTML=h;}).catch(function(e){showMsg(e.message,false);});}'
@@ -1092,7 +1093,10 @@ async function handleAdminAPI(request, env, cfg, segs, url) {
       singboxFull: base + '/singbox',
       v2ray: base + '/v2ray'
     };
-    if (cfg.enableVg) res.vg = base + '/vg';
+    if (cfg.enableVg) {
+      res.flclash = base + '/flclash';
+      res.vg = base + '/vg';
+    }
     return json(res);
   }
 
@@ -1301,7 +1305,7 @@ function subV2ray(cfg, url) {
 
 function q(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
 
-async function subClash(cfg, url) {
+async function subClash(cfg, url, request) {
   const host = url.host;
   const key = cfg.customPath || cfg.subKey;
   const nodes = buildNodes(cfg, host);
@@ -1330,6 +1334,33 @@ async function subClash(cfg, url) {
   }
   const nameList = allNames.length ? allNames.map(q).join(', ') : 'DIRECT';
 
+  // 客户端智能自适应 (彻底解决 Clash Meta 不支持 OpenVPN 导致 proxy 32 报错问题)：
+  // 1. 显式路径与参数优先：访问 /flclash 路径 或 带 ?vg=1 / ?home=1 / ?flclash=1 -> 包含家宽
+  //                      带 ?vg=0 / ?no_vg=1 -> 强制排除家宽
+  // 2. User-Agent 智能自适应识别：
+  //    - FlClash 支持 OpenVPN -> 自动包含家宽
+  //    - Clash Meta / CMFA / Stash 官方未编译 OpenVPN -> 自动排除家宽，确保 100% 导入成功且绝不报错
+  // 3. 常规 /clash 链接在普通访问下默认作为安全兼容版（排除 OpenVPN）
+  const pathSegs = url.pathname.split('/').filter(Boolean);
+  const pathSub = pathSegs[pathSegs.length - 1]?.toLowerCase();
+  const qVg = url.searchParams.get('vg');
+  const ua = (request ? (request.headers.get('User-Agent') || request.headers.get('user-agent') || '') : '').toLowerCase();
+
+  let includeVg = false;
+  if (cfg.enableVg) {
+    if (qVg === '1' || url.searchParams.get('home') === '1' || url.searchParams.get('flclash') === '1' || pathSub === 'flclash') {
+      includeVg = true;
+    } else if (qVg === '0' || url.searchParams.get('no_vg') === '1') {
+      includeVg = false;
+    } else if (ua.includes('flclash')) {
+      includeVg = true;
+    } else if (ua.includes('clash.meta') || ua.includes('clashmeta') || ua.includes('cfa') || ua.includes('clashforandroid') || ua.includes('stash')) {
+      includeVg = false;
+    } else {
+      includeVg = false;
+    }
+  }
+
   // 家宽链式代理集成 (VPN Gate 住宅宽带通过 dialer-proxy 链式穿透)
   const tlsNodes = nodes.filter(n => n.tls);
   const frontNodes = tlsNodes.length ? tlsNodes : nodes;
@@ -1341,7 +1372,7 @@ async function subClash(cfg, url) {
 
   let vgItems = [];
   let vgCerts = null;
-  if (cfg.enableVg) {
+  if (includeVg) {
     try {
       const vgData = await fetchVgNodes();
       const countryCounts = {};
