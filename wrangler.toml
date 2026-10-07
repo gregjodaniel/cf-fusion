@@ -1,7 +1,7 @@
 # cf-fusion wrangler 配置
-name = "cf-fusion-2"
+name = "cf-fusion"
 main = "_worker.js"
-compatibility_date = "2025-11-04"
+compatibility_date = "2025-01-01"
 workers_dev = true
 
 # 绑定 KV 命名空间(用于图形化配置 / 优选 IP / 连接日志)
